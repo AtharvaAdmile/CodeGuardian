@@ -37,6 +37,12 @@ from src.documentation.ui.review_view import ReviewView
 from src.documentation.ui.export_view import ExportView
 from src.code_parser import CodeParser
 from src.documentation.recursive_generator import RecursiveDocumentationGenerator
+from src.testing.test_orchestrator import TestOrchestrator
+from src.testing.ui.test_session_view import TestSessionView
+from src.testing.test_validator import TestValidator
+from src.testing.test_runner import TestRunner
+from src.testing.test_generator import TestGenerator
+from src.testing.test_analyzer import TestAnalyzer
 
 # Page configuration
 st.set_page_config(
@@ -187,6 +193,30 @@ if 'doc_orchestrator' not in st.session_state:
         st.session_state.doc_review_manager = None
         st.session_state.doc_export_module = None
         st.error(f"Error initializing documentation orchestrator: {str(e)}")
+
+# Initialize DevGuard Testing Orchestrator
+if 'test_orchestrator' not in st.session_state:
+    try:
+        # Initialize test components
+        q_engine = QueryEngine(
+             embedding_generator=st.session_state.embedding_generator,
+             vector_store=st.session_state.vector_store,
+             collection_name=st.session_state.collection_name
+        )
+        
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        
+        gen = TestGenerator(api_key=google_api_key, query_engine=q_engine)
+        orch = TestOrchestrator(
+            test_analyzer=TestAnalyzer(),
+            test_generator=gen,
+            test_validator=TestValidator(),
+            test_runner=TestRunner()
+        )
+        st.session_state.test_orchestrator = orch
+    except Exception as e:
+        print(f"Failed to init test orchestrator: {e}")
+        st.session_state.test_orchestrator = None
 
 # Sidebar
 with st.sidebar:
@@ -421,7 +451,7 @@ with st.expander("📊 Codebase Structure Analysis", expanded=True):
         st.info("ℹ️ Good codebase structure.")
 
 # Create tabs for different features
-tab1, tab2 = st.tabs(["💬 Q&A Chat", "📝 Documentation Forge"])
+tab1, tab2, tab3 = st.tabs(["💬 Q&A Chat", "📝 Documentation Forge", "🧪 DevGuard Testing"])
 
 # Tab 1: Q&A System
 with tab1:
@@ -806,3 +836,11 @@ with tab2:
                         st.session_state.doc_workflow_stage = 'file_selection'
                         st.rerun()
 
+
+# Tab 3: DevGuard Testing
+with tab3:
+    if st.session_state.test_orchestrator:
+        view = TestSessionView(st.session_state.test_orchestrator)
+        view.render()
+    else:
+        st.error("Test Orchestrator not initialized. Check logs.")

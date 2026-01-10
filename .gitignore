@@ -92,3 +92,8 @@ chroma_data1111/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Generated Tests
+tests/
+# Generated Tests
+tests/

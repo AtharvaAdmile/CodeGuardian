@@ -8,7 +8,7 @@ import typer
 from typing import Optional
 
 from cgctl import __version__
-from cgctl.commands import init, config, index, ask
+from cgctl.commands import init, config, index, ask, serve
 
 # Create the main CLI app
 app = typer.Typer(
@@ -23,6 +23,7 @@ app.add_typer(init.app, name="init")
 app.add_typer(config.app, name="config")
 app.add_typer(index.app, name="index")
 app.add_typer(ask.app, name="ask")
+app.add_typer(serve.app, name="serve")
 
 
 @app.callback(invoke_without_command=True)
@@ -33,9 +34,16 @@ def main(
     """
     🛡️ CodeGuardian - AI-powered institutional memory for codebases.
     
-    Use cgctl to index your codebase, ask questions about your code,
-    and get AI-powered assistance for understanding and maintaining
-    your software projects.
+    Use cgctl to index your codebase, retrieve context about your code,
+    and run an MCP server for integration with AI assistants like
+    GitHub Copilot.
+    
+    Commands:
+        init    - Initialize a new project
+        index   - Index your codebase into the vector store
+        ask     - Retrieve relevant code context
+        serve   - Start the MCP server for VS Code integration
+        config  - Manage project configuration
     """
     if version:
         typer.echo(f"CodeGuardian CLI v{__version__}")

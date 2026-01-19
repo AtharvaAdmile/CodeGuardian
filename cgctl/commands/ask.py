@@ -1,22 +1,24 @@
 """
-cgctl ask - Ask questions about your codebase.
+cgctl ask - Retrieve relevant code context from your codebase.
 
-Uses RAG to find relevant code and generates answers using the Universal LLM Caller.
+Uses local embeddings and vector search to find relevant code chunks.
+Returns context that can be used by AI assistants like GitHub Copilot.
 """
 
 import typer
 import os
+import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from cgctl.utils.output import (
     console, print_success, print_error, print_info,
     print_warning, print_header, print_sources_table,
-    print_code, print_markdown
+    print_code
 )
 from cgctl.utils.validators import validate_question
 
-app = typer.Typer(help="Ask questions about your codebase")
+app = typer.Typer(help="Retrieve relevant code context from your codebase")
 
 
 def get_project_id(project_path: str) -> Optional[str]:
@@ -30,101 +32,111 @@ def get_project_id(project_path: str) -> Optional[str]:
     return None
 
 
+def get_chroma_path(project_path: str) -> str:
+    """Get the ChromaDB storage path for the project."""
+    return str(Path(project_path) / "chroma_data")
+
+
 # ============================================
-# FUNCTION A: Context Gathering
+# FUNCTION A: Context Retrieval (Local Only)
 # ============================================
 
-def gather_ask_context(
+def retrieve_context(
     question: str,
-    project_id: str,
+    project_path: str,
     top_k: int = 5,
-    similarity_threshold: float = 0.7
 ) -> Dict[str, Any]:
     """
-    Function A: Gather context for answering a question.
+    Retrieve relevant code context using local embeddings.
     
-    This function handles all the algorithmic/programmatic processing:
-    - Generates embedding for the question
-    - Searches vector store for similar chunks
-    - Retrieves and formats relevant code context
+    This function uses sentence-transformers for embeddings and
+    ChromaDB for vector search. No external API calls are made.
     
     Args:
-        question: User's question
-        project_id: UUID of the project
+        question: User's question/query
+        project_path: Path to the project
         top_k: Number of results to retrieve
-        similarity_threshold: Minimum similarity score
         
     Returns:
         Dictionary containing:
-        - context: Formatted context string for LLM
-        - sources: List of source references
+        - chunks: List of relevant code chunks with content and metadata
+        - sources: List of source references (file, line numbers)
         - metadata: Additional metadata
     """
-    from src.llm.caller import generate_embedding
-    from src.db.queries import match_embeddings
+    from src.embedding_generator import EmbeddingGenerator
+    from src.vector_store import VectorStore
+    from src.query_engine import QueryEngine
     
-    # Generate embedding for the question
-    question_embedding = generate_embedding(question)
-    
-    # Search for similar chunks
-    matches = match_embeddings(
-        query_embedding=question_embedding,
-        match_threshold=similarity_threshold,
-        match_count=top_k
+    # Initialize local components
+    embedding_generator = EmbeddingGenerator()
+    vector_store = VectorStore(persist_directory=get_chroma_path(project_path))
+    query_engine = QueryEngine(
+        embedding_generator=embedding_generator,
+        vector_store=vector_store,
+        collection_name="codeguardian"
     )
     
-    if not matches:
+    # Generate embedding for the question (local)
+    question_embedding = embedding_generator.generate_embedding(question)
+    
+    # Search for similar chunks
+    chunks = query_engine.retrieve_chunks(question_embedding, n_results=top_k)
+    
+    if not chunks:
         return {
-            "context": "",
+            "chunks": [],
             "sources": [],
+            "context_text": "",
             "metadata": {"chunks_found": 0}
         }
     
-    # Format context for LLM
-    context_parts = []
-    sources = []
+    # Rerank for better relevance
+    chunks = query_engine.rerank_results(chunks, question)
     
-    for i, match in enumerate(matches):
-        context_parts.append(f"""
---- Source {i + 1}: {match['file_path']} (lines {match['start_line']}-{match['end_line']}) ---
-{match['chunk_text']}
-""")
+    # Format results
+    formatted_chunks = []
+    sources = []
+    context_parts = []
+    
+    for i, chunk in enumerate(chunks):
+        formatted_chunks.append({
+            "id": chunk.id,
+            "content": chunk.content,
+            "file_path": chunk.file_path,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "chunk_type": chunk.chunk_type,
+            "language": chunk.language,
+            "distance": chunk.distance
+        })
         
         sources.append({
-            "file_path": match['file_path'],
-            "start_line": match['start_line'],
-            "end_line": match['end_line'],
-            "similarity": match['similarity'],
+            "file_path": chunk.file_path,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "similarity": 1.0 - chunk.distance,  # Convert distance to similarity
         })
+        
+        # Build context text for display/export
+        context_parts.append(f"""
+--- Source {i + 1}: {chunk.file_path} (lines {chunk.start_line}-{chunk.end_line}) ---
+```{chunk.language}
+{chunk.content}
+```
+""")
     
-    context = "\n".join(context_parts)
+    context_text = "\n".join(context_parts)
+    avg_similarity = sum(s['similarity'] for s in sources) / len(sources)
     
     return {
-        "context": context,
+        "chunks": formatted_chunks,
         "sources": sources,
+        "context_text": context_text,
         "metadata": {
-            "chunks_found": len(matches),
-            "avg_similarity": sum(m['similarity'] for m in matches) / len(matches)
+            "chunks_found": len(chunks),
+            "avg_similarity": round(avg_similarity, 3)
         }
     }
-
-
-# ============================================
-# System Prompt for Code Q&A
-# ============================================
-
-CODE_QA_SYSTEM_PROMPT = """You are CodeGuardian, an AI assistant that helps developers understand their codebase.
-
-You have access to relevant code snippets from the user's project. Use this context to answer their questions accurately.
-
-Guidelines:
-1. Base your answers on the provided code context
-2. Reference specific files and line numbers when applicable
-3. If the context doesn't contain enough information, say so clearly
-4. Provide code examples when helpful
-5. Be concise but thorough
-
-Format your response using markdown for better readability."""
 
 
 @app.callback(invoke_without_command=True)
@@ -132,7 +144,7 @@ def ask_question(
     ctx: typer.Context,
     question: str = typer.Argument(
         ...,
-        help="Your question about the codebase"
+        help="Your question or search query about the codebase"
     ),
     path: str = typer.Option(
         ".",
@@ -144,30 +156,35 @@ def ask_question(
         "--top-k", "-k",
         help="Number of code chunks to retrieve"
     ),
-    no_stream: bool = typer.Option(
+    output_json: bool = typer.Option(
         False,
-        "--no-stream",
-        help="Disable streaming output"
+        "--json",
+        help="Output results as JSON (for programmatic use)"
     ),
     show_sources: bool = typer.Option(
         True,
         "--sources/--no-sources",
         help="Show source references"
-     ),
-    show_tokens: bool = typer.Option(
-        False,
-        "--tokens",
-        help="Display token usage for the request"
+    ),
+    show_content: bool = typer.Option(
+        True,
+        "--content/--no-content",
+        help="Show code content in output"
     ),
 ):
     """
-    Ask a question about your codebase.
+    Retrieve relevant code context from your codebase.
     
-    Uses RAG to find relevant code and generates an answer using the LLM.
+    Uses local embeddings to find code that's relevant to your query.
+    Returns context chunks that can be used with AI assistants.
     
     Example:
         cgctl ask "What does the main function do?"
         cgctl ask "How is authentication implemented?" --top-k 10
+        cgctl ask "database queries" --json
+    
+    Note: This command only retrieves context. For AI-generated answers,
+    use the MCP server with GitHub Copilot (cgctl serve).
     """
     # Validate question
     is_valid, error = validate_question(question)
@@ -184,171 +201,84 @@ def ask_question(
         print_error("Project not initialized. Run 'cgctl init' first.")
         raise typer.Exit(1)
     
-    # Load settings
-    try:
-        from src.config.settings import get_settings
-        settings = get_settings(project_path)
-    except Exception as e:
-        print_error(f"Failed to load settings: {e}")
-        raise typer.Exit(1)
+    if not output_json:
+        console.print()
+        console.print(f"[bold cyan]Query:[/bold cyan] {question}")
+        console.print()
     
-    console.print()
-    console.print(f"[bold cyan]Question:[/bold cyan] {question}")
-    console.print()
-    
-    # Token counting for embedding call
-    if show_tokens:
+    # Retrieve context (local embeddings only)
+    with console.status("[bold green]Searching codebase...[/bold green]") if not output_json else nullcontext():
         try:
-            from src.llm.caller import count_tokens
-            tokens = count_tokens(question)
-            print_info(f"Question tokens (Embedding input): [cyan]{tokens}[/cyan]")
-        except Exception as e:
-            print_warning(f"Failed to count tokens: {e}")
-
-    # Function A: Gather context
-    with console.status("[bold green]Searching codebase...[/bold green]"):
-        try:
-            context_result = gather_ask_context(
+            result = retrieve_context(
                 question=question,
-                project_id=project_id,
+                project_path=project_path,
                 top_k=top_k,
-                similarity_threshold=settings.retrieval.similarity_threshold
             )
         except Exception as e:
-            print_error(f"Failed to search codebase: {e}")
+            if output_json:
+                print(json.dumps({"error": str(e)}))
+            else:
+                print_error(f"Failed to search codebase: {e}")
             raise typer.Exit(1)
     
     # Check if we found any context
-    if not context_result["context"]:
-        print_warning("No relevant code found for your question.")
-        print_info("Try rephrasing your question or indexing more files.")
+    if not result["chunks"]:
+        if output_json:
+            print(json.dumps({"chunks": [], "message": "No relevant code found"}))
+        else:
+            print_warning("No relevant code found for your query.")
+            print_info("Try rephrasing your query or indexing more files.")
         raise typer.Exit(0)
     
-    print_info(f"Found {context_result['metadata']['chunks_found']} relevant code chunks")
-    console.print()
-    
-    # Token counting for generation call
-    if show_tokens:
-        try:
-            from src.llm.caller import count_tokens
-            full_text = f"System: {CODE_QA_SYSTEM_PROMPT}\n\nContext:\n{context_result['context']}\n\nUser: {question}"
-            tokens = count_tokens(full_text)
-            print_info(f"Full prompt tokens (Generation input): [cyan]{tokens}[/cyan]")
-        except Exception as e:
-            print_warning(f"Failed to count tokens: {e}")
-
-    # Function X: Call LLM
-    console.print("[bold cyan]Answer:[/bold cyan]")
-    console.print()
-    
-    try:
-        from src.llm.caller import llm_call, llm_stream
-        
-        if no_stream:
-            # Non-streaming response
-            answer = llm_call(
-                prompt=question,
-                context=context_result["context"],
-                system_prompt=CODE_QA_SYSTEM_PROMPT,
-            )
-            print_markdown(answer)
-        else:
-            # Streaming response
-            full_response = ""
-            for chunk in llm_stream(
-                prompt=question,
-                context=context_result["context"],
-                system_prompt=CODE_QA_SYSTEM_PROMPT,
-            ):
-                console.print(chunk, end="")
-                full_response += chunk
-            console.print()  # Final newline
-        
-    except Exception as e:
-        print_error(f"Failed to generate answer: {e}")
-        raise typer.Exit(1)
-    
-    # Show sources
-    if show_sources and context_result["sources"]:
+    # Output results
+    if output_json:
+        # JSON output for programmatic use
+        print(json.dumps(result, indent=2))
+    else:
+        # Human-readable output
+        print_success(f"Found {result['metadata']['chunks_found']} relevant code chunks")
+        print_info(f"Average similarity: {result['metadata']['avg_similarity']:.1%}")
         console.print()
-        print_sources_table(context_result["sources"])
+        
+        if show_content:
+            console.print("[bold]Relevant Code:[/bold]")
+            console.print(result["context_text"])
+        
+        if show_sources:
+            print_sources_table(result["sources"])
+        
+        console.print()
+        print_info("💡 Tip: Use this context with GitHub Copilot or run 'cgctl serve' to start the MCP server.")
 
 
-@app.command("interactive")
-def interactive_mode(
-    path: str = typer.Option(
-        ".",
-        "--path", "-p",
-        help="Path to the project directory"
-    ),
+# Context manager for silent operation
+from contextlib import contextmanager, nullcontext
+
+
+@app.command("context")
+def get_context_only(
+    query: str = typer.Argument(..., help="Search query"),
+    path: str = typer.Option(".", "--path", "-p", help="Project path"),
+    top_k: int = typer.Option(5, "--top-k", "-k", help="Number of chunks"),
 ):
     """
-    Start an interactive Q&A session.
+    Get raw context chunks as JSON (for scripting/piping).
     
-    Allows asking multiple questions without restarting the CLI.
+    This is a simplified command that outputs only the context text,
+    suitable for piping to other tools.
+    
+    Example:
+        cgctl ask context "authentication" | pbcopy
     """
-    # Resolve project path
     project_path = os.path.abspath(os.path.expanduser(path))
     
-    # Check for project initialization
-    project_id = get_project_id(project_path)
-    if not project_id:
-        print_error("Project not initialized. Run 'cgctl init' first.")
+    try:
+        result = retrieve_context(
+            question=query,
+            project_path=project_path,
+            top_k=top_k,
+        )
+        print(json.dumps(result, indent=2))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
         raise typer.Exit(1)
-    
-    print_header("CodeGuardian Interactive Mode", "Type 'exit' or 'quit' to leave")
-    
-    from src.config.settings import get_settings
-    from src.llm.caller import llm_stream
-    
-    settings = get_settings(project_path)
-    
-    while True:
-        try:
-            console.print()
-            question = console.input("[bold cyan]You:[/bold cyan] ")
-            
-            if question.lower() in ("exit", "quit", "q"):
-                print_info("Goodbye!")
-                break
-            
-            if not question.strip():
-                continue
-            
-            # Validate
-            is_valid, error = validate_question(question)
-            if not is_valid:
-                print_warning(error)
-                continue
-            
-            # Gather context
-            with console.status("[dim]Searching...[/dim]"):
-                context_result = gather_ask_context(
-                    question=question,
-                    project_id=project_id,
-                    top_k=5,
-                    similarity_threshold=settings.retrieval.similarity_threshold
-                )
-            
-            if not context_result["context"]:
-                print_warning("No relevant code found.")
-                continue
-            
-            # Stream response
-            console.print()
-            console.print("[bold green]CodeGuardian:[/bold green] ", end="")
-            
-            for chunk in llm_stream(
-                prompt=question,
-                context=context_result["context"],
-                system_prompt=CODE_QA_SYSTEM_PROMPT,
-            ):
-                console.print(chunk, end="")
-            
-            console.print()
-            
-        except KeyboardInterrupt:
-            print_info("\nGoodbye!")
-            break
-        except Exception as e:
-            print_error(f"Error: {e}")

@@ -1,0 +1,46 @@
+# CodeGuardian Configuration
+
+[project]
+name = "codeguardian"
+version = "2.0.0"
+
+[database]
+# Supabase connection (override with environment variables)
+url = ""
+key = ""
+
+[llm]
+# LLM provider settings
+provider = "gemini"
+model = "gemini-2.0-flash"
+temperature = 0.7
+max_tokens = 2048
+stream = true
+
+[embedding]
+# Embedding model settings
+model = "models/text-embedding-004"
+dimension = 768
+batch_size = 32
+
+[indexing]
+# File scanning settings
+exclude_dirs = [".git", "__pycache__", "node_modules", "venv", ".venv", "env", ".env", "dist", "build", ".idea", ".vscode", "site-packages"]
+supported_extensions = [".py", ".js", ".jsx", ".ts", ".tsx"]
+
+[chunking]
+# Code chunking settings
+min_chunk_tokens = 100
+max_chunk_tokens = 500
+overlap_tokens = 50
+
+[retrieval]
+# RAG retrieval settings
+initial_count = 10
+final_count = 5
+similarity_threshold = 0.7
+
+[agent]
+# Agent settings
+blast_radius_threshold = 5
+require_approval_above = 5

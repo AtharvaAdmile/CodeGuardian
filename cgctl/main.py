@@ -1,0 +1,50 @@
+"""
+CodeGuardian CLI - Main entry point.
+
+Provides the cgctl command-line interface.
+"""
+
+import typer
+from typing import Optional
+
+from cgctl import __version__
+from cgctl.commands import init, config, index, ask
+
+# Create the main CLI app
+app = typer.Typer(
+    name="cgctl",
+    help="🛡️ CodeGuardian - AI-powered institutional memory for codebases",
+    add_completion=True,
+    rich_markup_mode="rich",
+)
+
+# Register command modules
+app.add_typer(init.app, name="init")
+app.add_typer(config.app, name="config")
+app.add_typer(index.app, name="index")
+app.add_typer(ask.app, name="ask")
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-v", help="Show version"),
+):
+    """
+    🛡️ CodeGuardian - AI-powered institutional memory for codebases.
+    
+    Use cgctl to index your codebase, ask questions about your code,
+    and get AI-powered assistance for understanding and maintaining
+    your software projects.
+    """
+    if version:
+        typer.echo(f"CodeGuardian CLI v{__version__}")
+        raise typer.Exit()
+    
+    # If no command provided, show help
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+
+
+if __name__ == "__main__":
+    app()

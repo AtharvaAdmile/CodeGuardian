@@ -1,0 +1,128 @@
+# CodeGuardian Compliance Rules
+# These patterns are used to detect potential security and privacy violations
+
+version: "1.0"
+
+# PII (Personally Identifiable Information) Patterns
+pii_patterns:
+  - pattern: "password"
+    severity: critical
+    message: "Potential password exposure - never log or hardcode passwords"
+    
+  - pattern: "ssn"
+    severity: critical
+    message: "Social Security Number detected - requires encryption"
+    
+  - pattern: "social_security"
+    severity: critical
+    message: "Social Security Number detected - requires encryption"
+    
+  - pattern: "credit_card"
+    severity: critical
+    message: "Credit card data detected - must be PCI-DSS compliant"
+    
+  - pattern: "card_number"
+    severity: critical
+    message: "Credit card data detected - must be PCI-DSS compliant"
+    
+  - pattern: "cvv"
+    severity: critical
+    message: "CVV code detected - never store CVV data"
+
+# API Keys and Secrets
+secret_patterns:
+  - pattern: "api_key"
+    severity: high
+    message: "API key should not be hardcoded - use environment variables"
+    
+  - pattern: "api_secret"
+    severity: high
+    message: "API secret should not be hardcoded - use environment variables"
+    
+  - pattern: "secret_key"
+    severity: high
+    message: "Secret key should not be hardcoded - use environment variables"
+    
+  - pattern: "private_key"
+    severity: high
+    message: "Private key detected - ensure proper key management"
+    
+  - pattern: "access_token"
+    severity: high
+    message: "Access token should not be hardcoded"
+    
+  - pattern: "auth_token"
+    severity: high
+    message: "Auth token should not be hardcoded"
+
+# Personal Data (GDPR)
+gdpr_patterns:
+  - pattern: "user_email"
+    severity: medium
+    message: "User email is PII - ensure GDPR compliance when logging"
+    
+  - pattern: "email_address"
+    severity: medium
+    message: "Email address is PII - ensure GDPR compliance when logging"
+    
+  - pattern: "phone_number"
+    severity: medium
+    message: "Phone number is PII - ensure GDPR compliance"
+    
+  - pattern: "date_of_birth"
+    severity: medium
+    message: "Date of birth is PII - ensure GDPR compliance"
+    
+  - pattern: "home_address"
+    severity: medium
+    message: "Home address is PII - ensure GDPR compliance"
+
+# Health Data (HIPAA)
+hipaa_patterns:
+  - pattern: "patient_id"
+    severity: critical
+    message: "Patient ID is PHI - HIPAA compliance required"
+    
+  - pattern: "medical_record"
+    severity: critical
+    message: "Medical record is PHI - HIPAA compliance required"
+    
+  - pattern: "diagnosis"
+    severity: high
+    message: "Health diagnosis data - HIPAA compliance required"
+    
+  - pattern: "prescription"
+    severity: high
+    message: "Prescription data - HIPAA compliance required"
+
+# Dangerous Function Patterns
+dangerous_functions:
+  - pattern: "eval"
+    severity: critical
+    message: "eval() is dangerous - can lead to code injection"
+    
+  - pattern: "exec"
+    severity: critical
+    message: "exec() is dangerous - can lead to code injection"
+    
+  - pattern: "subprocess.call"
+    severity: high
+    message: "subprocess.call with shell=True can be dangerous"
+    
+  - pattern: "os.system"
+    severity: high
+    message: "os.system() can be dangerous - prefer subprocess with proper escaping"
+
+# Logging Concerns
+logging_patterns:
+  - pattern: "print.*password"
+    severity: critical
+    message: "Never print passwords to console/logs"
+    
+  - pattern: "logger.*password"
+    severity: critical
+    message: "Never log passwords"
+    
+  - pattern: "logging.*password"
+    severity: critical
+    message: "Never log passwords"

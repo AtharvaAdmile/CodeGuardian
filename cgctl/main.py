@@ -8,7 +8,7 @@ import typer
 from typing import Optional
 
 from cgctl import __version__
-from cgctl.commands import init, config, index, ask, serve
+from cgctl.commands import init, config, index, ask, serve, audit
 
 # Create the main CLI app
 app = typer.Typer(
@@ -24,6 +24,7 @@ app.add_typer(config.app, name="config")
 app.add_typer(index.app, name="index")
 app.add_typer(ask.app, name="ask")
 app.add_typer(serve.app, name="serve")
+app.add_typer(audit.app, name="audit")
 
 
 @app.callback(invoke_without_command=True)
@@ -44,6 +45,7 @@ def main(
         ask     - Retrieve relevant code context
         serve   - Start the MCP server for VS Code integration
         config  - Manage project configuration
+        audit   - Run code audits (experts, health, compliance)
     """
     if version:
         typer.echo(f"CodeGuardian CLI v{__version__}")

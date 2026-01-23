@@ -223,3 +223,40 @@ AS $$
   )
   SELECT COUNT(DISTINCT to_file_id)::INT FROM dep_tree;
 $$;
+
+-- ============================================
+-- 7. FILE METRICS (Tech Debt & Expertise)
+-- ============================================
+
+CREATE TABLE file_metrics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    file_path TEXT NOT NULL,
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    complexity_score INTEGER DEFAULT 0,
+    churn_score INTEGER DEFAULT 0,
+    health_score INTEGER DEFAULT 100,
+    top_expert TEXT,
+    backup_expert TEXT,
+    last_analyzed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(project_id, file_path)
+);
+
+CREATE INDEX idx_file_metrics_project ON file_metrics(project_id);
+CREATE INDEX idx_file_metrics_health ON file_metrics(health_score);
+
+-- ============================================
+-- 8. GIT CONTEXT CACHE
+-- ============================================
+
+CREATE TABLE git_context_cache (
+    commit_hash TEXT PRIMARY KEY,
+    message TEXT,
+    author TEXT,
+    pr_description TEXT,
+    timestamp TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_git_context_author ON git_context_cache(author);
+

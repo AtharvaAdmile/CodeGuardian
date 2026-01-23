@@ -1,0 +1,50 @@
+{
+    "src/mcp_server.py": {
+        "error_rate": 0.05,
+        "avg_latency_ms": 45,
+        "p99_latency_ms": 120,
+        "request_count": 15000,
+        "last_error": null,
+        "last_error_time": null
+    },
+    "src/query_engine.py": {
+        "error_rate": 0.02,
+        "avg_latency_ms": 850,
+        "p99_latency_ms": 2500,
+        "request_count": 8500,
+        "last_error": "Timeout waiting for vector store response",
+        "last_error_time": "2026-01-20T14:30:00Z"
+    },
+    "src/embedding_generator.py": {
+        "error_rate": 1.2,
+        "avg_latency_ms": 180,
+        "p99_latency_ms": 450,
+        "request_count": 25000,
+        "last_error": "Model loading failed: Out of memory",
+        "last_error_time": "2026-01-19T09:15:00Z"
+    },
+    "src/vector_store.py": {
+        "error_rate": 0.01,
+        "avg_latency_ms": 35,
+        "p99_latency_ms": 95,
+        "request_count": 50000,
+        "last_error": null,
+        "last_error_time": null
+    },
+    "cgctl/commands/index.py": {
+        "error_rate": 2.5,
+        "avg_latency_ms": 5200,
+        "p99_latency_ms": 15000,
+        "request_count": 500,
+        "last_error": "FileNotFoundError: No such file or directory",
+        "last_error_time": "2026-01-21T10:00:00Z"
+    },
+    "src/codebase_indexer.py": {
+        "error_rate": 0.8,
+        "avg_latency_ms": 3500,
+        "p99_latency_ms": 8000,
+        "request_count": 1200,
+        "last_error": "UnicodeDecodeError: invalid start byte",
+        "last_error_time": "2026-01-18T16:45:00Z"
+    }
+}

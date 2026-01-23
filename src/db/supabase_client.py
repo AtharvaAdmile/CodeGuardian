@@ -173,6 +173,74 @@ class SupabaseClient:
         """
         response = self._client.rpc(function_name, params).execute()
         return response.data
+    
+    def upsert_file_metrics(
+        self,
+        project_id: str,
+        file_path: str,
+        metrics: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Upsert file metrics (complexity, churn, health score, experts).
+        
+        Args:
+            project_id: UUID of the project
+            file_path: Path to the file
+            metrics: Dictionary containing:
+                - complexity_score: int
+                - churn_score: int
+                - health_score: int
+                - top_expert: str
+                - backup_expert: str (optional)
+                
+        Returns:
+            Upserted row data
+        """
+        from datetime import datetime
+        
+        data = {
+            "project_id": project_id,
+            "file_path": file_path,
+            "complexity_score": metrics.get("complexity_score", 0),
+            "churn_score": metrics.get("churn_score", 0),
+            "health_score": metrics.get("health_score", 100),
+            "top_expert": metrics.get("top_expert"),
+            "backup_expert": metrics.get("backup_expert"),
+            "last_analyzed_at": datetime.utcnow().isoformat()
+        }
+        
+        # Use upsert with on_conflict
+        response = self._client.table("file_metrics").upsert(
+            data,
+            on_conflict="project_id,file_path"
+        ).execute()
+        
+        if response.data:
+            return response.data[0]
+        return data
+    
+    def get_file_metrics(
+        self,
+        project_id: str,
+        file_path: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get file metrics for a project.
+        
+        Args:
+            project_id: UUID of the project
+            file_path: Optional specific file path
+            
+        Returns:
+            List of file metrics
+        """
+        query = self._client.table("file_metrics").select("*").eq("project_id", project_id)
+        
+        if file_path:
+            query = query.eq("file_path", file_path)
+            
+        response = query.execute()
+        return response.data or []
 
 
 def get_supabase_client() -> SupabaseClient:

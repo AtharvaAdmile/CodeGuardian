@@ -27,7 +27,6 @@ wheels/
 *.egg
 
 # Virtual environments
-.venv/
 .venv_corrupt/
 venv/
 ENV/

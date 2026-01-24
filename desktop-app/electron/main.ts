@@ -255,9 +255,14 @@ app.whenReady().then(() => {
         return executeMcpTool('get_file_health', { file_path: filePath }, projectPath);
     });
 
-    // Check compliance
+    // Check compliance (Standard)
     ipcMain.handle('cgctl:checkCompliance', async (_, projectPath: string, codeSnippet: string) => {
         return executeMcpTool('check_compliance', { code_snippet: codeSnippet }, projectPath);
+    });
+
+    // Check compliance (Regulatory/Medical)
+    ipcMain.handle('cgctl:checkRegulatoryCompliance', async (_, projectPath: string, filePath: string, fileContent: string) => {
+        return executeMcpTool('check_regulatory_compliance', { file_path: filePath, file_content: fileContent }, projectPath);
     });
 
     // Get file expert
@@ -353,6 +358,122 @@ app.whenReady().then(() => {
     // Read file content
     ipcMain.handle('fs:readFile', async (_, filePath: string) => {
         return fs.readFileSync(filePath, 'utf-8');
+    });
+
+    // Generate test case using AI
+    ipcMain.handle('cgctl:generateTestCase', async (_, projectPath: string, filePath: string, fileContent: string) => {
+        return executeMcpTool('generate_unit_test', {
+            file_path: filePath,
+            file_content: fileContent
+        }, projectPath);
+    });
+
+    // Save test file to generated_test_cases directory
+    ipcMain.handle('fs:saveTestFile', async (_, projectPath: string, sourceFilePath: string, testCode: string) => {
+        try {
+            const sourcePath = path.parse(sourceFilePath);
+            const sourceExt = sourcePath.ext.toLowerCase();
+
+            // Determine test file name based on language
+            let testFileName: string;
+            if (sourceExt === '.py') {
+                testFileName = `test_${sourcePath.name}.py`;
+            } else {
+                // JS/TS uses .test.ext format
+                testFileName = `${sourcePath.name}.test${sourceExt}`;
+            }
+
+            // Build the mirrored path structure
+            const testDir = path.join(projectPath, 'generated_test_cases', sourcePath.dir);
+            const testFilePath = path.join(testDir, testFileName);
+
+            // Create directory if it doesn't exist
+            if (!fs.existsSync(testDir)) {
+                fs.mkdirSync(testDir, { recursive: true });
+            }
+
+            // Write the test file
+            fs.writeFileSync(testFilePath, testCode, 'utf-8');
+
+            console.log(`Test file saved to: ${testFilePath}`);
+
+            return {
+                success: true,
+                path: testFilePath,
+                relativePath: path.relative(projectPath, testFilePath)
+            };
+        } catch (error: any) {
+            console.error('Error saving test file:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    });
+
+    // Run a local test file
+    ipcMain.handle('cgctl:runLocalTest', async (_, projectPath: string, testFilePath: string) => {
+        return executeMcpTool('run_generated_test', {
+            test_file_path: testFilePath,
+            project_path: projectPath
+        }, projectPath);
+    });
+
+    // Check if test file exists
+    ipcMain.handle('fs:testFileExists', async (_, projectPath: string, sourceFilePath: string) => {
+        try {
+            const sourcePath = path.parse(sourceFilePath);
+            const sourceExt = sourcePath.ext.toLowerCase();
+
+            let testFileName: string;
+            if (sourceExt === '.py') {
+                testFileName = `test_${sourcePath.name}.py`;
+            } else {
+                testFileName = `${sourcePath.name}.test${sourceExt}`;
+            }
+
+            const testFilePath = path.join(projectPath, 'generated_test_cases', sourcePath.dir, testFileName);
+
+            if (fs.existsSync(testFilePath)) {
+                const content = fs.readFileSync(testFilePath, 'utf-8');
+                return {
+                    exists: true,
+                    path: testFilePath,
+                    relativePath: path.relative(projectPath, testFilePath),
+                    content: content
+                };
+            }
+
+            return { exists: false };
+        } catch (error) {
+            return { exists: false };
+        }
+    });
+
+    // Update Gemini API Key in .env
+    ipcMain.handle('cgctl:updateApiKey', async (_, projectPath: string, apiKey: string) => {
+        try {
+            const envPath = path.join(projectPath, '.env');
+            let content = '';
+
+            if (fs.existsSync(envPath)) {
+                content = fs.readFileSync(envPath, 'utf-8');
+                if (content.includes('GOOGLE_API_KEY=')) {
+                    content = content.replace(/GOOGLE_API_KEY=.*/, `GOOGLE_API_KEY=${apiKey}`);
+                } else {
+                    content += `\nGOOGLE_API_KEY=${apiKey}\n`;
+                }
+            } else {
+                content = `GOOGLE_API_KEY=${apiKey}\n`;
+            }
+
+            fs.writeFileSync(envPath, content, 'utf-8');
+            console.log(`API Key updated in ${envPath}`);
+            return { success: true };
+        } catch (error: any) {
+            console.error('Error updating API Key:', error);
+            return { success: false, error: error.message };
+        }
     });
 
     app.on('activate', () => {

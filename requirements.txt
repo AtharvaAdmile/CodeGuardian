@@ -10,6 +10,9 @@ supabase>=2.0.0
 # MCP Server
 mcp>=1.0.0
 
+# Google Gemini API
+google-generativeai>=0.3.0
+
 # Local Embeddings
 sentence-transformers>=2.2.0
 torch>=2.0.0

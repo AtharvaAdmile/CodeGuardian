@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import { useProject } from '../App';
 import ActionsPane from '../components/ActionsPane';
+import { useSettings } from '../context/SettingsContext';
 
 interface FileNode {
     id: string; // full relative path
@@ -22,11 +23,15 @@ interface FileLink {
 
 export default function GraphDashboard() {
     const { projectPath } = useProject();
+    const { settings } = useSettings();
     const svgRef = useRef<SVGSVGElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
 
     const [files, setFiles] = useState<any[]>([]);
+    const [dependencyLinks, setDependencyLinks] = useState<FileLink[]>([]);
     const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
+    const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
+    const [highlightedLinks, setHighlightedLinks] = useState<Set<string>>(new Set());
     const [loading, setLoading] = useState(true);
 
     // Load data
@@ -39,8 +44,14 @@ export default function GraphDashboard() {
                 // Get all files
                 const fileList = await window.cgctl.listFiles(projectPath);
                 setFiles(fileList);
+
+                // Get dependency graph
+                const depGraph = await window.cgctl.analyzeProjectDependencies(projectPath);
+                if (depGraph && depGraph.links) {
+                    setDependencyLinks(depGraph.links);
+                }
             } catch (e) {
-                console.error("Failed to list files", e);
+                console.error("Failed to list files or dependencies", e);
             } finally {
                 setLoading(false);
             }
@@ -54,7 +65,7 @@ export default function GraphDashboard() {
         if (files.length === 0) return { nodes: [], links: [] };
 
         const nodesMap = new Map<string, FileNode>();
-        const links: FileLink[] = [];
+        const links: any[] = []; // Allow both structural and dependency links
 
         // Create Root Node
         const rootNode: FileNode = { id: '.', name: 'Root', path: '.', size: 0, type: 'directory' };
@@ -84,6 +95,17 @@ export default function GraphDashboard() {
             } else {
                 // Child of root
                 links.push({ source: '.', target: file.path });
+            }
+        });
+
+        // Add dependency links (initially hidden or subtle)
+        dependencyLinks.forEach(dep => {
+            if (nodesMap.has(dep.source as string) && nodesMap.has(dep.target as string)) {
+                links.push({
+                    source: dep.source,
+                    target: dep.target,
+                    type: 'dependency'
+                });
             }
         });
 
@@ -123,44 +145,95 @@ export default function GraphDashboard() {
             }
         });
 
-        // Simulation
         const simulation = d3.forceSimulation<FileNode>(graphData.nodes)
             .force("link", d3.forceLink<FileNode, FileLink>(graphData.links).id(d => d.id).distance(120))
-            .force("charge", d3.forceManyBody().strength(-400))
+            .force("charge", d3.forceManyBody().strength(settings.graph.nodeSpread))
             .force("center", d3.forceCenter(width / 2, height / 2))
             .force("collide", d3.forceCollide<FileNode>().radius(d => {
-                const nodeRadius = d.type === 'directory' ? 20 : 3 + Math.min(10, Math.sqrt(d.size || 0) * 0.1);
-                return nodeRadius + 25; // Adjusted padding for smaller folder nodes
+                const nodeRadius = d.type === 'directory' ? settings.graph.dirRadius : 3 + Math.min(10, Math.sqrt(d.size || 0) * settings.graph.fileRadiusScale);
+                return nodeRadius + 20;
             }).iterations(2));
 
 
-        // Render Links
         const link = g.append("g")
-            .attr("stroke", "#333")
-            .attr("stroke-opacity", 0.6)
             .selectAll("line")
             .data(graphData.links)
-            .join("line");
+            .join("line")
+            .attr("stroke", d => {
+                const linkId = `${typeof d.source === 'string' ? d.source : d.source.id}-${typeof d.target === 'string' ? d.target : d.target.id}`;
+                if (highlightedLinks.has(linkId)) return "#58a6ff"; // Highlighted edges in light blue
+                return d.type === 'dependency' ? "#58a6ff" : "#555";
+            })
+            .attr("stroke-opacity", d => {
+                const linkId = `${typeof d.source === 'string' ? d.source : d.source.id}-${typeof d.target === 'string' ? d.target : d.target.id}`;
+                if (highlightedLinks.size > 0) {
+                    return highlightedLinks.has(linkId) ? 1 : 0.1;
+                }
+                return d.type === 'dependency' ? 0.2 : settings.graph.edgeOpacity;
+            })
+            .attr("stroke-width", d => {
+                const linkId = `${typeof d.source === 'string' ? d.source : d.source.id}-${typeof d.target === 'string' ? d.target : d.target.id}`;
+                return highlightedLinks.has(linkId) ? 3 : 1;
+            })
+            .style("transition", "stroke-opacity 0.3s, stroke-width 0.3s, stroke 0.3s");
 
-        // Render Nodes
         const node = g.append("g")
             .selectAll("circle")
             .data(graphData.nodes)
             .join("circle")
-            .attr("r", d => d.type === 'directory' ? 48 : 3 + Math.min(10, Math.sqrt(d.size || 0) * 0.1))
+            .attr("r", d => d.type === 'directory' ? settings.graph.dirRadius : 3 + Math.min(10, Math.sqrt(d.size || 0) * settings.graph.fileRadiusScale))
             .attr("fill", d => {
+                if (selectedFile && d.id === selectedFile.id) return "#2ea043"; // Selected node is green
                 if (d.type === 'directory') return "#4a90e2"; // Blue folders
                 if (d.name.endsWith('.ts') || d.name.endsWith('.tsx')) return "#2f74c0"; // TS blue
                 if (d.name.endsWith('.css')) return "#c6538c"; // Pink CSS
                 return "#888"; // Grey others
             })
             .attr("stroke", "#fff")
-            .attr("stroke-width", d => d.type === 'directory' ? 2 : 0.5)
+            .attr("stroke-width", d => {
+                if (highlightedNodes.has(d.id)) return 4;
+                return d.type === 'directory' ? 2 : 0.5;
+            })
+            .style("opacity", d => {
+                if (highlightedNodes.size > 0) {
+                    return highlightedNodes.has(d.id) ? 1 : 0.2;
+                }
+                return d.type === 'directory' ? 0.9 : 1;
+            })
             .style("cursor", "pointer")
-            .style("opacity", d => d.type === 'directory' ? 0.9 : 1)
             .on("click", (event, d) => {
                 event.stopPropagation();
                 setSelectedFile(d);
+
+                if (d.type === 'file') {
+                    // Compute dependencies
+                    const highlighted = new Set<string>();
+                    const currentLinks = new Set<string>();
+                    highlighted.add(d.id);
+
+                    // Recursive find dependencies (one-level for now as requested, or full chain?)
+                    // "intermediate edges and notes that connect the file and its dependencies"
+                    // Let's do a breath-first search
+                    const queue = [d.id];
+                    while (queue.length > 0) {
+                        const currentId = queue.shift()!;
+                        dependencyLinks.forEach(link => {
+                            if (link.source === currentId) {
+                                const targetId = typeof link.target === 'string' ? link.target : (link.target as any).id;
+                                if (!highlighted.has(targetId)) {
+                                    highlighted.add(targetId);
+                                    currentLinks.add(`${currentId}-${targetId}`);
+                                    queue.push(targetId);
+                                }
+                            }
+                        });
+                    }
+                    setHighlightedNodes(highlighted);
+                    setHighlightedLinks(currentLinks);
+                } else {
+                    setHighlightedNodes(new Set());
+                    setHighlightedLinks(new Set());
+                }
             })
             .call(d3.drag<any, any>()
                 .on("start", dragstarted)
@@ -176,20 +249,25 @@ export default function GraphDashboard() {
             .text(d => d.name)
             .attr("font-family", "monospace")
             .attr("font-size", d => {
-                const baseSize = d.type === 'directory' ? 14 : 7;
+                const baseSize = d.type === 'directory' ? settings.graph.dirRadius * 0.3 : 7;
                 const scale = Math.min(2, Math.sqrt(d.size || 0) * 0.05);
                 return baseSize + scale;
             })
             .attr("text-anchor", "middle")
             .attr("dy", d => {
                 if (d.type === 'directory') return 5; // Center vertically inside node
-                const nodeRadius = 3 + Math.min(10, Math.sqrt(d.size || 0) * 0.1);
+                const nodeRadius = 3 + Math.min(10, Math.sqrt(d.size || 0) * settings.graph.fileRadiusScale);
                 return nodeRadius + 12; // Position below file node
             })
             .attr("fill", d => d.type === 'directory' ? "#fff" : "#ccc")
             .attr("font-weight", d => d.type === 'directory' ? "700" : "normal")
             .style("pointer-events", "none")
-            .style("opacity", d => d.type === 'directory' ? 1 : 0.8);
+            .style("opacity", d => {
+                if (highlightedNodes.size > 0) {
+                    return highlightedNodes.has(d.id) ? 1 : 0.1;
+                }
+                return d.type === 'directory' ? 1 : 0.8;
+            });
 
         node.append("title").text(d => d.path);
 
@@ -226,16 +304,17 @@ export default function GraphDashboard() {
             event.subject.fy = null;
         }
 
-        // Cleanup
         return () => {
             simulation.stop();
         };
 
-    }, [graphData]);
+    }, [graphData, settings, highlightedNodes, highlightedLinks, selectedFile]);
 
     // Handle background click to deselect
     const handleBackgroundClick = () => {
         setSelectedFile(null);
+        setHighlightedNodes(new Set());
+        setHighlightedLinks(new Set());
     };
 
     return (

@@ -24,7 +24,7 @@ class DatabaseConfig:
 class LLMConfig:
     """LLM provider configuration."""
     provider: str = "gemini"
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.5-flash"
     temperature: float = 0.7
     max_tokens: int = 2048
     stream: bool = True

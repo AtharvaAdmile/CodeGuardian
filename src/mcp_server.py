@@ -37,12 +37,14 @@ from src.documentation.dependency_analyzer import DependencyAnalyzer
 from src.documentation.gap_detector import GapDetector
 from src.testing.test_analyzer import TestAnalyzer
 from src.testing.test_runner import TestRunner
+from src.testing.test_generator import TestGenerator
 from src.models.documentation_models import CodeElement
 
 # Advanced Context Analyzers
 from src.analysis.git_context import GitContextAnalyzer
 from src.analysis.expertise import ExpertiseTracker
 from src.analysis.compliance import ComplianceScanner
+from src.analysis.regulatory_scanner import get_regulatory_scanner
 from src.analysis.runtime import RuntimeLoader
 
 logger = logging.getLogger(__name__)
@@ -542,6 +544,78 @@ def run_tests(file_path: Optional[str] = None, test_dir: str = "tests") -> Dict[
 
 
 @mcp.tool()
+def generate_unit_test(file_path: str, file_content: str) -> Dict[str, Any]:
+    """
+    Generate a unit test for a source file using AI.
+    
+    Use this tool to automatically generate comprehensive unit tests
+    for a given source code file. Supports Python (pytest) and
+    JavaScript/TypeScript (jest).
+    
+    Args:
+        file_path: Path to the source file (used for language detection)
+        file_content: Content of the source file to generate tests for
+    
+    Returns:
+        Dictionary containing:
+        - test_code: Generated test code string
+        - language: Detected programming language
+        - framework: Selected test framework (pytest/jest)
+        - suggested_test_path: Recommended path for saving the test file
+        - success: Whether generation was successful
+    """
+    if not file_path:
+        return {"error": "File path is required", "test_code": None}
+    
+    if not file_content or not file_content.strip():
+        return {"error": "File content cannot be empty", "test_code": None}
+    
+    try:
+        generator = TestGenerator()
+        result = generator.generate_test(file_path, file_content)
+        return result
+    except Exception as e:
+        logger.error(f"Error generating unit test: {e}")
+        return {"error": str(e), "test_code": None, "success": False}
+
+
+@mcp.tool()
+def run_generated_test(test_file_path: str, project_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Execute a generated test file and return the results.
+    
+    Use this tool to run a specific test file that was generated
+    by the generate_unit_test tool. For security, only tests in
+    the generated_test_cases/ directory can be executed.
+    
+    Args:
+        test_file_path: Path to the test file to run
+        project_path: Root path of the project
+    
+    Returns:
+        Dictionary containing:
+        - passed: Whether all tests passed
+        - output: Full test output
+        - error_message: Error details if failed
+    """
+    project_root = project_path or str(_get_project_root())
+    
+    try:
+        runner = TestRunner(project_root=project_root)
+        result = runner.run_generated_test(test_file_path)
+        
+        return {
+            "passed": result.passed,
+            "file_path": result.file_path,
+            "output": result.output,
+            "error_message": result.error_message
+        }
+    except Exception as e:
+        logger.error(f"Error running generated test: {e}")
+        return {"error": str(e), "passed": False}
+
+
+@mcp.tool()
 def detect_documentation_gaps(file_path: str) -> Dict[str, Any]:
     """
     Analyze a file to find undocumented or poorly documented code elements.
@@ -778,6 +852,36 @@ def check_compliance(code_snippet: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error checking compliance: {e}")
         return {"error": str(e), "passed": False}
+
+
+@mcp.tool()
+def check_regulatory_compliance(file_path: str, file_content: str) -> Dict[str, Any]:
+    """
+    Evaluate code against medical/regulatory standards (FDA, ISO, IEC).
+    
+    Use this tool to check if code complies with:
+    - FDA 21 CFR Part 11
+    - IEC 62304 (Medical Device Software)
+    - ISO 13485 (Quality Management)
+    - ISO 27001 / HIPAA (Security)
+    
+    Args:
+        file_path: Path to the source file
+        file_content: Content of the source file to analyze
+        
+    Returns:
+        Dictionary containing:
+        - passed: boolean
+        - score: 0-100 score
+        - violations: List of gaps found
+        - summary: Human-readable summary
+    """
+    try:
+        scanner = get_regulatory_scanner()
+        return scanner.scan_file(file_path, file_content)
+    except Exception as e:
+        logger.error(f"Error checking regulatory compliance: {e}")
+        return {"error": str(e), "passed": False, "score": 0}
 
 
 @mcp.tool()

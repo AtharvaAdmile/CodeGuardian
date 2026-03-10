@@ -103,9 +103,10 @@ result = ${toolName}(${Object.entries(args).map(([k, v]) => `${k}=${JSON.stringi
 print(json.dumps(result))
 `;
 
+        const backendPath = path.resolve(__dirname, '../../');
         const proc = spawn('python3', ['-c', pythonScript], {
             cwd: projectPath,
-            env: { ...process.env, PYTHONPATH: projectPath },
+            env: { ...process.env, PYTHONPATH: backendPath },
         });
 
         let stdout = '';

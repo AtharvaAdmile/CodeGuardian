@@ -1,14 +1,154 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
-import { spawn, exec } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
-// Path to cgctl - try global first, fallback to project venv
-const CGCTL_PATH = process.env.CGCTL_PATH || 'cgctl';
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const PYTHON_PATH = '/opt/miniconda3/bin/python';
+const SERVER_PORT = 8742;
+const SERVER_BASE = `http://localhost:${SERVER_PORT}`;
+const HEALTH_POLL_MS = 500;
+const HEALTH_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+// ─── State ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
+let serverProcess: ChildProcess | null = null;
+let isQuitting = false;
 
-function createWindow() {
+// ─── Server Lifecycle ───────────────────────────────────────────────────────
+
+function startServer(): ChildProcess {
+    const backendPath = path.resolve(__dirname, '../../');
+
+    const proc = spawn(
+        PYTHON_PATH,
+        ['-m', 'uvicorn', 'server.app:create_app', '--factory', '--port', String(SERVER_PORT)],
+        {
+            cwd: backendPath,
+            env: { ...process.env, PYTHONPATH: backendPath },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        }
+    );
+
+    proc.stdout?.on('data', (data) => {
+        console.log(`[server] ${data.toString().trimEnd()}`);
+    });
+
+    proc.stderr?.on('data', (data) => {
+        console.error(`[server] ${data.toString().trimEnd()}`);
+    });
+
+    proc.on('exit', (code, signal) => {
+        console.error(`[server] exited  code=${code}  signal=${signal}`);
+        // Only show crash dialog if we didn't intentionally kill it
+        if (serverProcess !== null && !isQuitting) {
+            const choice = dialog.showMessageBoxSync({
+                type: 'error',
+                title: 'CodeGuardian Server Crashed',
+                message: `The backend server exited unexpectedly (code ${code}).`,
+                buttons: ['Restart Server', 'Quit'],
+                defaultId: 0,
+            });
+
+            if (choice === 0) {
+                serverProcess = startServer();
+                waitForServer()
+                    .then(() => console.log('[server] restarted successfully'))
+                    .catch(() => {
+                        dialog.showErrorBox(
+                            'CodeGuardian',
+                            'Failed to restart the backend server. The application will now quit.'
+                        );
+                        app.quit();
+                    });
+            } else {
+                app.quit();
+            }
+        }
+    });
+
+    proc.on('error', (err) => {
+        console.error(`[server] spawn error: ${err.message}`);
+        dialog.showErrorBox(
+            'CodeGuardian',
+            `Failed to start the backend server:\n${err.message}`
+        );
+    });
+
+    return proc;
+}
+
+async function waitForServer(): Promise<void> {
+    const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+        try {
+            const res = await fetch(`${SERVER_BASE}/api/health`, {
+                signal: AbortSignal.timeout(2000),
+            });
+            if (res.ok) {
+                console.log('[server] healthy ✓');
+                return;
+            }
+        } catch {
+            // server not ready yet — retry
+        }
+        await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
+    }
+
+    throw new Error(`Server did not become healthy within ${HEALTH_TIMEOUT_MS / 1000}s`);
+}
+
+function killServer(): void {
+    if (serverProcess && !serverProcess.killed) {
+        console.log('[server] sending SIGTERM');
+        serverProcess.kill('SIGTERM');
+        serverProcess = null;
+    }
+}
+
+// ─── HTTP Helper ────────────────────────────────────────────────────────────
+
+async function serverFetch<T = any>(
+    method: 'GET' | 'POST',
+    urlPath: string,
+    body?: Record<string, any>
+): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+        const options: RequestInit = {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+        };
+
+        if (body !== undefined) {
+            options.body = JSON.stringify(body);
+        }
+
+        const res = await fetch(`${SERVER_BASE}${urlPath}`, options);
+        const json = await res.json();
+
+        if (!res.ok) {
+            // FastAPI returns { detail: "..." } on errors
+            const detail = json?.detail ?? JSON.stringify(json);
+            throw new Error(`HTTP ${res.status}: ${detail}`);
+        }
+
+        return json as T;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// ─── Window ─────────────────────────────────────────────────────────────────
+
+function createWindow(): void {
     mainWindow = new BrowserWindow({
         width: 1400,
         height: 900,
@@ -23,7 +163,6 @@ function createWindow() {
         },
     });
 
-    // In development, load from Vite dev server
     if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
         mainWindow.loadURL('http://localhost:5173');
         mainWindow.webContents.openDevTools();
@@ -36,113 +175,53 @@ function createWindow() {
     });
 }
 
-// Execute cgctl command and return JSON output
-function executeCgctl(command: string, args: string[], cwd?: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-        const fullArgs = [command, ...args];
+// ─── App Lifecycle ──────────────────────────────────────────────────────────
 
-        // Add --json flag if command supports it
-        if (['ask'].includes(command)) {
-            fullArgs.push('--json');
-        }
+app.on('before-quit', () => {
+    isQuitting = true;
+    killServer();
+});
 
-        console.log(`Executing: ${CGCTL_PATH} ${fullArgs.join(' ')}`);
+app.whenReady().then(async () => {
+    // 1. Start backend server
+    console.log('[main] starting backend server …');
+    serverProcess = startServer();
 
-        const proc = spawn(CGCTL_PATH, fullArgs, {
-            cwd: cwd || process.cwd(),
-            env: { ...process.env },
-            shell: true,
-        });
+    try {
+        await waitForServer();
+    } catch (err: any) {
+        dialog.showErrorBox(
+            'CodeGuardian',
+            `Backend server failed to start:\n${err.message}\n\nThe application will quit.`
+        );
+        app.quit();
+        return;
+    }
 
-        let stdout = '';
-        let stderr = '';
+    // 2. Register IPC handlers
+    registerIpcHandlers();
 
-        proc.stdout.on('data', (data) => {
-            stdout += data.toString();
-        });
-
-        proc.stderr.on('data', (data) => {
-            stderr += data.toString();
-        });
-
-        proc.on('close', (code) => {
-            if (code === 0) {
-                // Try to parse as JSON, otherwise return raw output
-                try {
-                    resolve(JSON.parse(stdout));
-                } catch {
-                    resolve({ output: stdout, raw: true });
-                }
-            } else {
-                reject(new Error(stderr || `Command failed with code ${code}`));
-            }
-        });
-
-        proc.on('error', (err) => {
-            reject(err);
-        });
-    });
-}
-
-// Execute Python MCP tool directly for commands not in CLI
-function executeMcpTool(toolName: string, args: Record<string, any>, projectPath: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-        const pythonScript = `
-import sys
-import os
-import json
-
-# Set project path
-os.chdir('${projectPath}')
-
-# Import the tool
-from src.mcp_server import ${toolName}
-
-# Execute with args
-result = ${toolName}(${Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')})
-print(json.dumps(result))
-`;
-
-        const backendPath = path.resolve(__dirname, '../../');
-        const proc = spawn('python3', ['-c', pythonScript], {
-            cwd: projectPath,
-            env: { ...process.env, PYTHONPATH: backendPath },
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout.on('data', (data) => {
-            stdout += data.toString();
-        });
-
-        proc.stderr.on('data', (data) => {
-            stderr += data.toString();
-        });
-
-        proc.on('close', (code) => {
-            if (code === 0) {
-                try {
-                    resolve(JSON.parse(stdout));
-                } catch {
-                    resolve({ output: stdout, raw: true });
-                }
-            } else {
-                reject(new Error(stderr || `Tool failed with code ${code}`));
-            }
-        });
-
-        proc.on('error', (err) => {
-            reject(err);
-        });
-    });
-}
-
-// IPC Handlers
-app.whenReady().then(() => {
+    // 3. Create window only after server is healthy
     createWindow();
 
-    // Select project directory
+    app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+            createWindow();
+        }
+    });
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+        app.quit();
+    }
+});
+
+// ─── IPC Handlers ───────────────────────────────────────────────────────────
+
+function registerIpcHandlers(): void {
+    // ── Dialog / Filesystem (local — no server needed) ──────────────
+
     ipcMain.handle('dialog:selectDirectory', async () => {
         const result = await dialog.showOpenDialog(mainWindow!, {
             properties: ['openDirectory'],
@@ -151,7 +230,6 @@ app.whenReady().then(() => {
 
         if (!result.canceled && result.filePaths.length > 0) {
             const projectPath = result.filePaths[0];
-            // Check if it's a valid CodeGuardian project
             const configPath = path.join(projectPath, '.codeguardian');
             const isValid = fs.existsSync(configPath);
             return { path: projectPath, isValid };
@@ -159,160 +237,6 @@ app.whenReady().then(() => {
         return null;
     });
 
-    // Initialize project with cgctl init
-    ipcMain.handle('cgctl:init', async (_, projectPath: string, projectName?: string) => {
-        return new Promise((resolve, reject) => {
-            const args = [projectPath];
-            if (projectName) {
-                args.push('--name', projectName);
-            }
-
-            console.log(`Executing: cgctl init ${args.join(' ')}`);
-
-            const proc = spawn('cgctl', ['init', ...args], {
-                cwd: projectPath,
-                env: { ...process.env },
-                shell: true,
-            });
-
-            let stdout = '';
-            let stderr = '';
-
-            proc.stdout.on('data', (data) => {
-                stdout += data.toString();
-            });
-
-            proc.stderr.on('data', (data) => {
-                stderr += data.toString();
-            });
-
-            proc.on('close', (code) => {
-                if (code === 0) {
-                    resolve({ success: true, output: stdout });
-                } else {
-                    resolve({ success: false, error: stderr || stdout });
-                }
-            });
-
-            proc.on('error', (err) => {
-                resolve({ success: false, error: err.message });
-            });
-        });
-    });
-
-    // Index project with cgctl index
-    ipcMain.handle('cgctl:index', async (_, projectPath: string, force?: boolean) => {
-        return new Promise((resolve, reject) => {
-            const args = [projectPath];
-            if (force) {
-                args.push('--force');
-            }
-
-            console.log(`Executing: cgctl index ${args.join(' ')}`);
-
-            const proc = spawn('cgctl', ['index', ...args], {
-                cwd: projectPath,
-                env: { ...process.env },
-                shell: true,
-            });
-
-            let stdout = '';
-            let stderr = '';
-
-            proc.stdout.on('data', (data) => {
-                stdout += data.toString();
-            });
-
-            proc.stderr.on('data', (data) => {
-                stderr += data.toString();
-            });
-
-            proc.on('close', (code) => {
-                if (code === 0) {
-                    resolve({ success: true, output: stdout });
-                } else {
-                    resolve({ success: false, error: stderr || stdout });
-                }
-            });
-
-            proc.on('error', (err) => {
-                resolve({ success: false, error: err.message });
-            });
-        });
-    });
-
-    // Analyze structure
-    ipcMain.handle('cgctl:analyzeStructure', async (_, projectPath: string) => {
-        return executeMcpTool('analyze_structure', { project_path: projectPath }, projectPath);
-    });
-
-    // Get runtime stats
-    ipcMain.handle('cgctl:getRuntimeStats', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('get_runtime_stats', { file_path: filePath }, projectPath);
-    });
-
-    // Get file health
-    ipcMain.handle('cgctl:getFileHealth', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('get_file_health', { file_path: filePath }, projectPath);
-    });
-
-    // Check compliance (Standard)
-    ipcMain.handle('cgctl:checkCompliance', async (_, projectPath: string, codeSnippet: string) => {
-        return executeMcpTool('check_compliance', { code_snippet: codeSnippet }, projectPath);
-    });
-
-    // Check compliance (Regulatory/Medical)
-    ipcMain.handle('cgctl:checkRegulatoryCompliance', async (_, projectPath: string, filePath: string, fileContent: string) => {
-        return executeMcpTool('check_regulatory_compliance', { file_path: filePath, file_content: fileContent }, projectPath);
-    });
-
-    // Get file expert
-    ipcMain.handle('cgctl:getFileExpert', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('get_file_expert', { file_path: filePath }, projectPath);
-    });
-
-    // Get file history
-    ipcMain.handle('cgctl:getFileHistory', async (_, projectPath: string, filePath: string, lineStart?: number, lineEnd?: number) => {
-        const args: Record<string, any> = { file_path: filePath };
-        if (lineStart) args.line_start = lineStart;
-        if (lineEnd) args.line_end = lineEnd;
-        return executeMcpTool('get_file_history', args, projectPath);
-    });
-
-    // Find dependencies
-    ipcMain.handle('cgctl:findDependencies', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('find_dependencies', { file_path: filePath }, projectPath);
-    });
-
-    // Analyze project dependencies (Bulk)
-    ipcMain.handle('cgctl:analyzeProjectDependencies', async (_, projectPath: string) => {
-        return executeMcpTool('analyze_project_dependencies', { project_path: projectPath }, projectPath);
-    });
-
-    // Detect documentation gaps
-    ipcMain.handle('cgctl:detectDocumentationGaps', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('detect_documentation_gaps', { file_path: filePath }, projectPath);
-    });
-
-    // Analyze testability
-    ipcMain.handle('cgctl:analyzeTestability', async (_, projectPath: string, filePath: string) => {
-        return executeMcpTool('analyze_testability', { file_path: filePath }, projectPath);
-    });
-
-    // Query codebase
-    ipcMain.handle('cgctl:queryCodebase', async (_, projectPath: string, query: string, nResults: number = 5) => {
-        return executeMcpTool('query_codebase', { query, n_results: nResults }, projectPath);
-    });
-
-    // Run tests
-    ipcMain.handle('cgctl:runTests', async (_, projectPath: string, filePath?: string, testDir?: string) => {
-        const args: Record<string, any> = {};
-        if (filePath) args.file_path = filePath;
-        if (testDir) args.test_dir = testDir;
-        return executeMcpTool('run_tests', args, projectPath);
-    });
-
-    // List files in directory
     ipcMain.handle('fs:listFiles', async (_, dirPath: string, extensions: string[] | null = null) => {
         const files: { path: string; name: string; size: number; type: 'file' | 'directory' }[] = [];
 
@@ -327,24 +251,13 @@ app.whenReady().then(() => {
                     const relativePath = path.relative(dirPath, fullPath);
 
                     if (stat.isDirectory()) {
-                        files.push({
-                            path: relativePath,
-                            name: item,
-                            size: 0,
-                            type: 'directory'
-                        });
+                        files.push({ path: relativePath, name: item, size: 0, type: 'directory' });
                         walkDir(fullPath);
                     } else {
                         if (extensions && extensions.length > 0) {
                             if (!extensions.some(ext => item.endsWith(ext))) continue;
                         }
-
-                        files.push({
-                            path: relativePath,
-                            name: item,
-                            size: stat.size,
-                            type: 'file'
-                        });
+                        files.push({ path: relativePath, name: item, size: stat.size, type: 'file' });
                     }
                 }
             } catch (e) {
@@ -356,71 +269,43 @@ app.whenReady().then(() => {
         return files;
     });
 
-    // Read file content
     ipcMain.handle('fs:readFile', async (_, filePath: string) => {
         return fs.readFileSync(filePath, 'utf-8');
     });
 
-    // Generate test case using AI
-    ipcMain.handle('cgctl:generateTestCase', async (_, projectPath: string, filePath: string, fileContent: string) => {
-        return executeMcpTool('generate_unit_test', {
-            file_path: filePath,
-            file_content: fileContent
-        }, projectPath);
-    });
-
-    // Save test file to generated_test_cases directory
     ipcMain.handle('fs:saveTestFile', async (_, projectPath: string, sourceFilePath: string, testCode: string) => {
         try {
             const sourcePath = path.parse(sourceFilePath);
             const sourceExt = sourcePath.ext.toLowerCase();
 
-            // Determine test file name based on language
             let testFileName: string;
             if (sourceExt === '.py') {
                 testFileName = `test_${sourcePath.name}.py`;
             } else {
-                // JS/TS uses .test.ext format
                 testFileName = `${sourcePath.name}.test${sourceExt}`;
             }
 
-            // Build the mirrored path structure
             const testDir = path.join(projectPath, 'generated_test_cases', sourcePath.dir);
             const testFilePath = path.join(testDir, testFileName);
 
-            // Create directory if it doesn't exist
             if (!fs.existsSync(testDir)) {
                 fs.mkdirSync(testDir, { recursive: true });
             }
 
-            // Write the test file
             fs.writeFileSync(testFilePath, testCode, 'utf-8');
-
             console.log(`Test file saved to: ${testFilePath}`);
 
             return {
                 success: true,
                 path: testFilePath,
-                relativePath: path.relative(projectPath, testFilePath)
+                relativePath: path.relative(projectPath, testFilePath),
             };
         } catch (error: any) {
             console.error('Error saving test file:', error);
-            return {
-                success: false,
-                error: error.message
-            };
+            return { success: false, error: error.message };
         }
     });
 
-    // Run a local test file
-    ipcMain.handle('cgctl:runLocalTest', async (_, projectPath: string, testFilePath: string) => {
-        return executeMcpTool('run_generated_test', {
-            test_file_path: testFilePath,
-            project_path: projectPath
-        }, projectPath);
-    });
-
-    // Check if test file exists
     ipcMain.handle('fs:testFileExists', async (_, projectPath: string, sourceFilePath: string) => {
         try {
             const sourcePath = path.parse(sourceFilePath);
@@ -441,7 +326,7 @@ app.whenReady().then(() => {
                     exists: true,
                     path: testFilePath,
                     relativePath: path.relative(projectPath, testFilePath),
-                    content: content
+                    content,
                 };
             }
 
@@ -451,7 +336,156 @@ app.whenReady().then(() => {
         }
     });
 
-    // Update Gemini API Key in .env
+    // ── HTTP-backed IPC Handlers (replacing spawn/executeMcpTool) ───
+
+    // Initialize + index project
+    ipcMain.handle('cgctl:init', async (_, projectPath: string, projectName?: string) => {
+        try {
+            const result = await serverFetch('POST', '/api/index', {
+                project_id: projectName || path.basename(projectPath),
+                project_path: projectPath,
+                force: false,
+            });
+            return { success: true, output: JSON.stringify(result) };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // Index project
+    ipcMain.handle('cgctl:index', async (_, projectPath: string, force?: boolean) => {
+        try {
+            const result = await serverFetch('POST', '/api/index', {
+                project_id: path.basename(projectPath),
+                project_path: projectPath,
+                force: force ?? false,
+            });
+            return { success: true, output: JSON.stringify(result) };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // Analyze structure
+    ipcMain.handle('cgctl:analyzeStructure', async (_, projectPath: string) => {
+        return serverFetch('POST', '/api/analyze/structure', { project_path: projectPath });
+    });
+
+    // Get runtime stats
+    ipcMain.handle('cgctl:getRuntimeStats', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/runtime', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Get file health
+    ipcMain.handle('cgctl:getFileHealth', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/health', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Check compliance (standard)
+    ipcMain.handle('cgctl:checkCompliance', async (_, projectPath: string, codeSnippet: string) => {
+        return serverFetch('POST', '/api/analyze/compliance', {
+            project_path: projectPath,
+            code_snippet: codeSnippet,
+        });
+    });
+
+    // Check compliance (regulatory/medical)
+    ipcMain.handle('cgctl:checkRegulatoryCompliance', async (_, projectPath: string, filePath: string, fileContent: string) => {
+        return serverFetch('POST', '/api/analyze/regulatory-compliance', {
+            project_path: projectPath,
+            file_path: filePath,
+            file_content: fileContent,
+        });
+    });
+
+    // Get file expert
+    ipcMain.handle('cgctl:getFileExpert', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/expert', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Get file history
+    ipcMain.handle('cgctl:getFileHistory', async (_, projectPath: string, filePath: string, lineStart?: number, lineEnd?: number) => {
+        const body: Record<string, any> = { project_path: projectPath, file_path: filePath };
+        if (lineStart) body.line_start = lineStart;
+        if (lineEnd) body.line_end = lineEnd;
+        return serverFetch('POST', '/api/analyze/history', body);
+    });
+
+    // Find dependencies (single file)
+    ipcMain.handle('cgctl:findDependencies', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/dependencies', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Analyze project dependencies (bulk graph)
+    ipcMain.handle('cgctl:analyzeProjectDependencies', async (_, projectPath: string) => {
+        return serverFetch('POST', '/api/analyze/project-dependencies', {
+            project_path: projectPath,
+        });
+    });
+
+    // Detect documentation gaps
+    ipcMain.handle('cgctl:detectDocumentationGaps', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/documentation-gaps', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Analyze testability
+    ipcMain.handle('cgctl:analyzeTestability', async (_, projectPath: string, filePath: string) => {
+        return serverFetch('POST', '/api/analyze/testability', {
+            project_path: projectPath,
+            file_path: filePath,
+        });
+    });
+
+    // Query codebase (RAG)
+    ipcMain.handle('cgctl:queryCodebase', async (_, projectPath: string, query: string, nResults: number = 5) => {
+        return serverFetch('POST', '/api/ask', {
+            project_id: path.basename(projectPath),
+            question: query,
+            conversation_history: [],
+        });
+    });
+
+    // Run tests
+    ipcMain.handle('cgctl:runTests', async (_, projectPath: string, filePath?: string, testDir?: string) => {
+        const body: Record<string, any> = { project_path: projectPath };
+        if (filePath) body.file_path = filePath;
+        if (testDir) body.test_dir = testDir;
+        return serverFetch('POST', '/api/analyze/tests', body);
+    });
+
+    // Generate test case using AI
+    ipcMain.handle('cgctl:generateTestCase', async (_, projectPath: string, filePath: string, fileContent: string) => {
+        return serverFetch('POST', '/api/analyze/generate-test', {
+            project_path: projectPath,
+            file_path: filePath,
+            file_content: fileContent,
+        });
+    });
+
+    // Run a generated test file
+    ipcMain.handle('cgctl:runLocalTest', async (_, projectPath: string, testFilePath: string) => {
+        return serverFetch('POST', '/api/analyze/run-test', {
+            project_path: projectPath,
+            test_file_path: testFilePath,
+        });
+    });
+
+    // Update API Key
     ipcMain.handle('cgctl:updateApiKey', async (_, projectPath: string, apiKey: string) => {
         try {
             const envPath = path.join(projectPath, '.env');
@@ -476,16 +510,4 @@ app.whenReady().then(() => {
             return { success: false, error: error.message };
         }
     });
-
-    app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
-        }
-    });
-});
-
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
-});
+}

@@ -1,284 +1,272 @@
 """
-cgctl ask - Retrieve relevant code context from your codebase.
+cgctl ask — Ask a natural-language question about the indexed codebase.
 
-Uses local embeddings and vector search to find relevant code chunks.
-Returns context that can be used by AI assistants like GitHub Copilot.
+Connected mode:  streams from POST /api/ask/stream, rendering tokens
+                 live with Rich Markdown as they arrive.
+
+Offline mode:    falls back to local vector search via src.* (no LLM answer,
+                 just ranked code chunks).
 """
 
-import typer
-import os
+from __future__ import annotations
+
 import json
+import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional
+
+import typer
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
 
 from cgctl.utils.output import (
-    console, print_success, print_error, print_info,
-    print_warning, print_header, print_sources_table,
-    print_code
+    console,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
 )
-from cgctl.utils.validators import validate_question
 
-app = typer.Typer(help="Retrieve relevant code context from your codebase")
+app = typer.Typer(help="Ask a question about the codebase")
+
+_SEVERITY_COLOUR = {
+    "critical": "bold red",
+    "high": "red",
+    "medium": "yellow",
+    "low": "dim",
+}
 
 
-def get_project_id(project_path: str) -> Optional[str]:
-    """Get project ID from .codeguardian file."""
-    config_file = Path(project_path) / ".codeguardian"
-    if config_file.exists():
-        content = config_file.read_text()
-        for line in content.split("\n"):
+def _read_project_id(project_path: str) -> str:
+    cg = Path(project_path) / ".codeguardian" / "config.toml"
+    if cg.exists():
+        for line in cg.read_text().splitlines():
+            if line.strip().startswith("project_id"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    flat = Path(project_path) / ".codeguardian"
+    if flat.is_file():
+        for line in flat.read_text().splitlines():
             if line.startswith("project_id"):
-                return line.split("=")[1].strip().strip('"')
-    return None
+                return line.split("=", 1)[1].strip().strip('"')
+    return os.path.basename(project_path)
 
 
-def get_chroma_path(project_path: str) -> str:
-    """Get the ChromaDB storage path for the project."""
-    return str(Path(project_path) / "chroma_data")
-
-
-# ============================================
-# FUNCTION A: Context Retrieval (Local Only)
-# ============================================
-
-def retrieve_context(
-    question: str,
-    project_path: str,
-    top_k: int = 5,
-) -> Dict[str, Any]:
-    """
-    Retrieve relevant code context using local embeddings.
-    
-    This function uses sentence-transformers for embeddings and
-    ChromaDB for vector search. No external API calls are made.
-    
-    Args:
-        question: User's question/query
-        project_path: Path to the project
-        top_k: Number of results to retrieve
-        
-    Returns:
-        Dictionary containing:
-        - chunks: List of relevant code chunks with content and metadata
-        - sources: List of source references (file, line numbers)
-        - metadata: Additional metadata
-    """
-    from src.embedding_generator import EmbeddingGenerator
-    from src.vector_store import VectorStore
-    from src.query_engine import QueryEngine
-    
-    # Initialize local components
-    embedding_generator = EmbeddingGenerator()
-    vector_store = VectorStore(persist_directory=get_chroma_path(project_path))
-    query_engine = QueryEngine(
-        embedding_generator=embedding_generator,
-        vector_store=vector_store,
-        collection_name="codeguardian"
-    )
-    
-    # Generate embedding for the question (local)
-    question_embedding = embedding_generator.generate_embedding(question)
-    
-    # Search for similar chunks
-    chunks = query_engine.retrieve_chunks(question_embedding, n_results=top_k)
-    
-    if not chunks:
-        return {
-            "chunks": [],
-            "sources": [],
-            "context_text": "",
-            "metadata": {"chunks_found": 0}
-        }
-    
-    # Rerank for better relevance
-    chunks = query_engine.rerank_results(chunks, question)
-    
-    # Format results
-    formatted_chunks = []
-    sources = []
-    context_parts = []
-    
-    for i, chunk in enumerate(chunks):
-        formatted_chunks.append({
-            "id": chunk.id,
-            "content": chunk.content,
-            "file_path": chunk.file_path,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line,
-            "chunk_type": chunk.chunk_type,
-            "language": chunk.language,
-            "distance": chunk.distance
-        })
-        
-        sources.append({
-            "file_path": chunk.file_path,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line,
-            "similarity": 1.0 - chunk.distance,  # Convert distance to similarity
-        })
-        
-        # Build context text for display/export
-        context_parts.append(f"""
---- Source {i + 1}: {chunk.file_path} (lines {chunk.start_line}-{chunk.end_line}) ---
-```{chunk.language}
-{chunk.content}
-```
-""")
-    
-    context_text = "\n".join(context_parts)
-    avg_similarity = sum(s['similarity'] for s in sources) / len(sources)
-    
-    return {
-        "chunks": formatted_chunks,
-        "sources": sources,
-        "context_text": context_text,
-        "metadata": {
-            "chunks_found": len(chunks),
-            "avg_similarity": round(avg_similarity, 3)
-        }
-    }
+# ── Main command ──────────────────────────────────────────────────────────
 
 
 @app.callback(invoke_without_command=True)
 def ask_question(
     ctx: typer.Context,
-    question: str = typer.Argument(
-        ...,
-        help="Your question or search query about the codebase"
-    ),
-    path: str = typer.Option(
-        ".",
-        "--path", "-p",
-        help="Path to the project directory"
-    ),
-    top_k: int = typer.Option(
-        5,
-        "--top-k", "-k",
-        help="Number of code chunks to retrieve"
-    ),
-    output_json: bool = typer.Option(
-        False,
-        "--json",
-        help="Output results as JSON (for programmatic use)"
-    ),
-    show_sources: bool = typer.Option(
-        True,
-        "--sources/--no-sources",
-        help="Show source references"
-    ),
-    show_content: bool = typer.Option(
-        True,
-        "--content/--no-content",
-        help="Show code content in output"
-    ),
+    question: str = typer.Argument(..., help="Natural-language question about the codebase"),
+    path: str = typer.Option(".", "--path", "-p", help="Path to the project directory"),
+    project_id: Optional[str] = typer.Option(None, "--project-id", help="Override project ID"),
+    no_stream: bool = typer.Option(False, "--no-stream", help="Use non-streaming mode (connected only)"),
+    top_k: int = typer.Option(5, "--top-k", "-k", help="Chunks to retrieve (offline mode)"),
+    output_json: bool = typer.Option(False, "--json", help="Output raw JSON (connected only)"),
 ):
     """
-    Retrieve relevant code context from your codebase.
-    
-    Uses local embeddings to find code that's relevant to your query.
-    Returns context chunks that can be used with AI assistants.
-    
-    Example:
-        cgctl ask "What does the main function do?"
-        cgctl ask "How is authentication implemented?" --top-k 10
-        cgctl ask "database queries" --json
-    
-    Note: This command only retrieves context. For AI-generated answers,
-    use the MCP server with GitHub Copilot (cgctl serve).
+    Ask a natural-language question about the indexed codebase.
+
+    In connected mode the answer is streamed from the server and rendered
+    as Markdown with source citations and expert attribution.
+
+    In offline mode (--offline) the command retrieves the most relevant
+    code chunks using local embeddings — no LLM answer is generated.
+
+    Examples:
+        cgctl ask "How does the authentication flow work?"
+        cgctl ask "Who owns server/routes/query.py?" --path /my/project
+        cgctl ask "rate limiting" --offline
     """
-    # Validate question
-    is_valid, error = validate_question(question)
-    if not is_valid:
-        print_error(error)
-        raise typer.Exit(1)
-    
-    # Resolve project path
+    from cgctl.client import is_offline, make_client
+
     project_path = os.path.abspath(os.path.expanduser(path))
-    
-    # Check for project initialization
-    project_id = get_project_id(project_path)
-    if not project_id:
-        print_error("Project not initialized. Run 'cgctl init' first.")
-        raise typer.Exit(1)
-    
-    if not output_json:
-        console.print()
-        console.print(f"[bold cyan]Query:[/bold cyan] {question}")
-        console.print()
-    
-    # Retrieve context (local embeddings only)
-    with console.status("[bold green]Searching codebase...[/bold green]") if not output_json else nullcontext():
-        try:
-            result = retrieve_context(
-                question=question,
-                project_path=project_path,
-                top_k=top_k,
-            )
-        except Exception as e:
-            if output_json:
-                print(json.dumps({"error": str(e)}))
-            else:
-                print_error(f"Failed to search codebase: {e}")
-            raise typer.Exit(1)
-    
-    # Check if we found any context
-    if not result["chunks"]:
-        if output_json:
-            print(json.dumps({"chunks": [], "message": "No relevant code found"}))
-        else:
-            print_warning("No relevant code found for your query.")
-            print_info("Try rephrasing your query or indexing more files.")
-        raise typer.Exit(0)
-    
-    # Output results
-    if output_json:
-        # JSON output for programmatic use
-        print(json.dumps(result, indent=2))
-    else:
-        # Human-readable output
-        print_success(f"Found {result['metadata']['chunks_found']} relevant code chunks")
-        print_info(f"Average similarity: {result['metadata']['avg_similarity']:.1%}")
-        console.print()
-        
-        if show_content:
-            console.print("[bold]Relevant Code:[/bold]")
-            console.print(result["context_text"])
-        
-        if show_sources:
-            print_sources_table(result["sources"])
-        
-        console.print()
-        print_info("💡 Tip: Use this context with GitHub Copilot or run 'cgctl serve' to start the MCP server.")
+    pid = project_id or _read_project_id(project_path)
 
+    console.print()
+    console.print(Panel(f"[bold]{question}[/bold]", title="[cyan]Question[/cyan]", border_style="cyan"))
+    console.print()
 
-# Context manager for silent operation
-from contextlib import contextmanager, nullcontext
+    if is_offline():
+        _ask_offline(question, project_path, pid, top_k)
+        return
 
-
-@app.command("context")
-def get_context_only(
-    query: str = typer.Argument(..., help="Search query"),
-    path: str = typer.Option(".", "--path", "-p", help="Project path"),
-    top_k: int = typer.Option(5, "--top-k", "-k", help="Number of chunks"),
-):
-    """
-    Get raw context chunks as JSON (for scripting/piping).
-    
-    This is a simplified command that outputs only the context text,
-    suitable for piping to other tools.
-    
-    Example:
-        cgctl ask context "authentication" | pbcopy
-    """
-    project_path = os.path.abspath(os.path.expanduser(path))
-    
+    client = make_client()
     try:
-        result = retrieve_context(
-            question=query,
-            project_path=project_path,
-            top_k=top_k,
+        if no_stream:
+            _ask_blocking(client, pid, question, output_json)
+        else:
+            _ask_streaming(client, pid, question, output_json)
+    except ConnectionError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+    except Exception as exc:
+        print_error(f"Query failed: {exc}")
+        raise typer.Exit(1)
+
+
+# ── Connected: streaming ──────────────────────────────────────────────────
+
+
+def _ask_streaming(client, pid: str, question: str, output_json: bool) -> None:
+    payload = {"project_id": pid, "question": question, "conversation_history": []}
+
+    sources: list[dict] = []
+    decisions: list[dict] = []
+    experts: list[dict] = []
+    answer_parts: list[str] = []
+
+    with console.status("[bold green]Querying…[/bold green]", spinner="dots"):
+        # Consume first event to confirm connection before removing spinner
+        first = True
+        for event in client.stream_post("/api/ask/stream", payload):
+            if first:
+                first = False
+
+            etype = event.get("type")
+
+            if etype == "source":
+                sources.append(event.get("source", {}))
+
+            elif etype == "chunk":
+                answer_parts.append(event.get("content", ""))
+
+            elif etype == "metadata":
+                decisions = event.get("decisions", [])
+                experts = event.get("experts", [])
+
+            elif etype == "error":
+                print_error(event.get("message", "Stream error"))
+                return
+
+    if output_json:
+        print(json.dumps({
+            "answer": "".join(answer_parts),
+            "sources": sources,
+            "decisions": decisions,
+            "experts": experts,
+        }, indent=2))
+        return
+
+    # Render answer
+    answer = "".join(answer_parts).strip()
+    if answer:
+        console.print(Markdown(answer))
+
+    _render_sources(sources)
+    _render_decisions(decisions)
+    _render_experts(experts)
+
+
+# ── Connected: non-streaming ──────────────────────────────────────────────
+
+
+def _ask_blocking(client, pid: str, question: str, output_json: bool) -> None:
+    payload = {"project_id": pid, "question": question, "conversation_history": []}
+
+    with console.status("[bold green]Querying…[/bold green]"):
+        data = client.post("/api/ask", payload)
+
+    if output_json:
+        print(json.dumps(data, indent=2))
+        return
+
+    answer = data.get("answer", "").strip()
+    if answer:
+        console.print(Markdown(answer))
+
+    _render_sources(data.get("sources", []))
+    _render_decisions(data.get("decisions_referenced", []))
+    _render_experts(data.get("experts", []))
+
+
+# ── Rich renderers ────────────────────────────────────────────────────────
+
+
+def _render_sources(sources: list[dict]) -> None:
+    if not sources:
+        return
+    console.print()
+    console.print(Rule("[dim]Sources[/dim]", style="dim"))
+    seen: set[str] = set()
+    table = Table(show_header=True, header_style="bold dim", box=None)
+    table.add_column("File", style="cyan")
+    table.add_column("Lines", justify="center", style="dim")
+    table.add_column("Relevance", justify="right", style="dim")
+    for s in sources:
+        fp = s.get("file_path", "")
+        if fp in seen:
+            continue
+        seen.add(fp)
+        start = s.get("start_line")
+        end = s.get("end_line")
+        lines = f"{start}–{end}" if start else "—"
+        score = s.get("relevance_score", 0.0)
+        table.add_row(fp, lines, f"{score:.2f}")
+    console.print(table)
+
+
+def _render_decisions(decisions: list[dict]) -> None:
+    if not decisions:
+        return
+    console.print()
+    console.print(Rule("[dim]Architectural Decisions[/dim]", style="dim"))
+    for d in decisions:
+        title = d.get("title") or "Untitled"
+        body = d.get("decision", "")
+        console.print(f"  [bold yellow]▶[/bold yellow] [bold]{title}[/bold]")
+        if body:
+            console.print(f"    [dim]{body[:200]}[/dim]")
+
+
+def _render_experts(experts: list[dict]) -> None:
+    if not experts:
+        return
+    names = ", ".join(e.get("name", "") for e in experts if e.get("name"))
+    if names:
+        console.print()
+        console.print(f"[dim]File owners:[/dim] [green]{names}[/green]")
+
+
+# ── Offline fallback ──────────────────────────────────────────────────────
+
+
+def _ask_offline(question: str, project_path: str, project_id: str, top_k: int) -> None:
+    print_info("Running in [yellow]offline[/yellow] mode — retrieving chunks (no LLM answer).")
+    try:
+        from src.embedding_generator import EmbeddingGenerator  # type: ignore
+        from src.vector_store import VectorStore  # type: ignore
+        from src.query_engine import QueryEngine  # type: ignore
+    except ImportError as exc:
+        print_error(f"Offline mode requires legacy src modules: {exc}")
+        raise typer.Exit(1)
+
+    chroma_path = str(Path(project_path) / "chroma_data")
+    try:
+        embed_gen = EmbeddingGenerator()
+        vector_store = VectorStore(persist_directory=chroma_path)
+        qe = QueryEngine(
+            embedding_generator=embed_gen,
+            vector_store=vector_store,
+            collection_name="codeguardian",
         )
-        print(json.dumps(result, indent=2))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        q_emb = embed_gen.generate_embedding(question)
+        chunks = qe.retrieve_chunks(q_emb, n_results=top_k)
+        chunks = qe.rerank_results(chunks, question)
+
+        if not chunks:
+            print_warning("No relevant chunks found. Have you run [cyan]cgctl index[/cyan]?")
+            return
+
+        print_success(f"Found {len(chunks)} relevant chunk(s).")
+        for i, chunk in enumerate(chunks, 1):
+            console.print(f"\n[bold cyan]── Chunk {i}: {chunk.file_path}:{chunk.start_line}–{chunk.end_line}[/bold cyan]")
+            from rich.syntax import Syntax
+            lang = getattr(chunk, "language", "python") or "python"
+            console.print(Syntax(chunk.content, lang, theme="monokai", line_numbers=True, start_line=chunk.start_line))
+
+    except Exception as exc:
+        print_error(f"Offline query failed: {exc}")
         raise typer.Exit(1)

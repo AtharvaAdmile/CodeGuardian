@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ function startServer(): ChildProcess {
 
     const proc = spawn(
         PYTHON_PATH,
-        ['-m', 'uvicorn', 'server.app:create_app', '--factory', '--port', String(SERVER_PORT)],
+        ['-m', 'uvicorn', 'server.app:create_app', '--factory', '--host', '0.0.0.0', '--port', String(SERVER_PORT)],
         {
             cwd: backendPath,
             env: { ...process.env, PYTHONPATH: backendPath },
@@ -80,21 +81,30 @@ function startServer(): ChildProcess {
 
     return proc;
 }
-
 async function waitForServer(): Promise<void> {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
         try {
-            const res = await fetch(`${SERVER_BASE}/api/health`, {
-                signal: AbortSignal.timeout(2000),
+            const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+                const req = http.get('http://127.0.0.1:8742/api/health', (res) => {
+                    resolve(res);
+                });
+                req.on('error', reject);
+                req.setTimeout(2000, () => {
+                    req.destroy();
+                    reject(new Error('timeout'));
+                });
             });
-            if (res.ok) {
+            // Accept any 2xx response - server is up even if "degraded"
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
                 console.log('[server] healthy ✓');
                 return;
             }
-        } catch {
-            // server not ready yet — retry
+            console.log(`[server] health returned ${res.statusCode}, retrying...`);
+        } catch (err: any) {
+            // Server not ready yet — retry
+            console.log(`[server] not ready: ${err.message}`);
         }
         await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
     }
@@ -117,33 +127,50 @@ async function serverFetch<T = any>(
     urlPath: string,
     body?: Record<string, any>
 ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Request timeout')), REQUEST_TIMEOUT_MS);
 
-    try {
-        const options: RequestInit = {
+        const options: http.RequestOptions = {
+            hostname: '127.0.0.1',
+            port: SERVER_PORT,
+            path: urlPath,
             method,
             headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
         };
 
+        const req = http.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                clearTimeout(timeout);
+                if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+                    try {
+                        resolve(JSON.parse(data) as T);
+                    } catch {
+                        resolve(data as T);
+                    }
+                } else {
+                    try {
+                        const json = JSON.parse(data);
+                        const detail = json?.detail ?? data;
+                        reject(new Error(`HTTP ${res.statusCode}: ${detail}`));
+                    } catch {
+                        reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+                    }
+                }
+            });
+        });
+
+        req.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+        });
+
         if (body !== undefined) {
-            options.body = JSON.stringify(body);
+            req.write(JSON.stringify(body));
         }
-
-        const res = await fetch(`${SERVER_BASE}${urlPath}`, options);
-        const json = await res.json();
-
-        if (!res.ok) {
-            // FastAPI returns { detail: "..." } on errors
-            const detail = json?.detail ?? JSON.stringify(json);
-            throw new Error(`HTTP ${res.status}: ${detail}`);
-        }
-
-        return json as T;
-    } finally {
-        clearTimeout(timer);
-    }
+        req.end();
+    });
 }
 
 // ─── Window ─────────────────────────────────────────────────────────────────

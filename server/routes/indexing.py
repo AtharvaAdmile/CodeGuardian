@@ -428,55 +428,6 @@ async def _flush_batch(
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Phase 2: Git Blame → Expertise Mapping (background)
-# ═════════════════════════════════════════════════════════════════════════
-
-
-async def _phase2_expertise_map(
-    project_path: str,
-    indexed_files: list[str],
-    status: IndexStatus,
-    supabase_client=None,
-) -> None:
-    """
-    Build expertise map from git blame for all indexed files.
-
-    Runs in a thread pool since GitService is synchronous.
-    """
-    status.expertise_status = "running"
-
-    try:
-        from server.services.git_service import GitService, GitServiceError
-
-        try:
-            git_svc = GitService(
-                project_path,
-                supabase_client=supabase_client,
-            )
-        except GitServiceError as exc:
-            logger.warning("Phase 2 skipped — not a git repo: %s", exc)
-            status.expertise_status = "skipped"
-            return
-
-        # Run blame (blocking I/O) in a thread
-        expertise = await asyncio.to_thread(
-            git_svc.build_expertise_map, indexed_files
-        )
-
-        status.expertise_files_mapped = len(expertise)
-        status.expertise_status = "completed"
-        logger.info(
-            "Phase 2 complete: expertise mapped for %d files",
-            len(expertise),
-        )
-
-    except Exception as exc:
-        logger.error("Phase 2 failed: %s", exc)
-        status.expertise_status = "failed"
-        status.errors.append(f"expertise mapping error: {exc}")
-
-
-# ═════════════════════════════════════════════════════════════════════════
 # Phase 3: Recent Commits → Decision Extraction (background)
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -580,6 +531,71 @@ async def _phase3_decision_extraction(
 
 
 # ═════════════════════════════════════════════════════════════════════════
+# Phase 4: Knowledge Graph Build (background)
+# ═════════════════════════════════════════════════════════════════════════
+
+
+async def _phase4_knowledge_graph(
+    project_path: str,
+    status: IndexStatus,
+    knowledge_graph=None,
+    expertise_map: dict | None = None,
+    decisions: list | None = None,
+    supabase_client=None,
+    project_id: str = "",
+) -> None:
+    """
+    Rebuild the knowledge graph from scratch after Phase 2 & 3 complete.
+
+    Runs in a thread pool since graph construction is CPU-bound.
+    Persists to .codeguardian/knowledge_graph.json.
+    """
+    if knowledge_graph is None:
+        logger.info("Phase 4 skipped — no KnowledgeGraph available")
+        status.graph_status = "skipped"
+        return
+
+    status.graph_status = "running"
+
+    try:
+        await asyncio.to_thread(
+            knowledge_graph.rebuild,
+            project_path,
+            None,        # git_service: not needed post-phase-2
+            expertise_map,
+            decisions,
+        )
+
+        # Persist to disk
+        persist_path = Path(project_path) / ".codeguardian" / "knowledge_graph.json"
+        await asyncio.to_thread(
+            knowledge_graph.save_to_json, str(persist_path)
+        )
+
+        # Optional Supabase persistence
+        if supabase_client and project_id:
+            await asyncio.to_thread(
+                knowledge_graph.save_to_supabase, supabase_client, project_id
+            )
+
+        stats = knowledge_graph.get_stats()
+        status.graph_nodes = stats.get("total_nodes", 0)
+        status.graph_edges = stats.get("total_edges", 0)
+        status.graph_status = "completed"
+
+        logger.info(
+            "Phase 4 complete: knowledge graph has %d nodes, %d edges",
+            status.graph_nodes,
+            status.graph_edges,
+        )
+
+    except Exception as exc:
+        logger.error("Phase 4 failed: %s", exc)
+        status.graph_status = "failed"
+        status.errors.append(f"knowledge graph error: {exc}")
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # Main indexing orchestrator
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -595,13 +611,15 @@ async def _index_project(
     supabase_client=None,
     decision_extractor=None,
     decision_service=None,
+    knowledge_graph=None,
 ) -> None:
     """
-    Run the 3-phase indexing pipeline.
+    Run the 4-phase indexing pipeline.
 
     Phase 1 (fast):       Code → embeddings → vector store
     Phase 2 (background): Git blame → expertise mapping
     Phase 3 (background): Recent commits → decision extraction
+    Phase 4 (background): Rebuild knowledge graph
 
     Progress is written to ``jobs[job_id]`` for polling.
     """
@@ -621,36 +639,78 @@ async def _index_project(
         # Mark as completed — code is now searchable
         status.status = JobStatus.COMPLETED
 
-        # ── Phase 2 & 3: Background git analysis ──────────────────────
-        # These run concurrently in the background AFTER Phase 1 completes.
+        # ── Phase 2 & 3: Background git analysis (concurrent) ──────────
         # The user can already query the codebase while these are running.
 
-        await asyncio.gather(
-            _phase2_expertise_map(
-                project_path=project_path,
-                indexed_files=indexed_files,
-                status=status,
-                supabase_client=supabase_client,
-            ),
-            _phase3_decision_extraction(
+        phase2_result: dict | None = None
+        phase3_decisions: list | None = None
+
+        async def _run_phase2() -> dict | None:
+            nonlocal phase2_result
+            from server.services.git_service import GitService, GitServiceError
+            try:
+                git_svc = GitService(project_path, supabase_client=supabase_client)
+                expertise = await asyncio.to_thread(
+                    git_svc.build_expertise_map, indexed_files
+                )
+                status.expertise_files_mapped = len(expertise)
+                status.expertise_status = "completed"
+                phase2_result = {
+                    fp: [
+                        {"author": e.author, "email": e.email,
+                         "commit_count": e.commit_count}
+                        for e in entries
+                    ]
+                    for fp, entries in expertise.items()
+                }
+                return phase2_result
+            except Exception as exc:
+                logger.warning("Phase 2 error: %s", exc)
+                status.expertise_status = "failed"
+                status.errors.append(f"expertise mapping error: {exc}")
+                return None
+
+        async def _run_phase3() -> list | None:
+            nonlocal phase3_decisions
+            await _phase3_decision_extraction(
                 project_path=project_path,
                 status=status,
                 decision_extractor=decision_extractor,
                 decision_service=decision_service,
                 embedding_service=embedding_service,
-            ),
+            )
+            return None  # decisions stored in decision_service; pass None to graph
+
+        status.expertise_status = "running"
+
+        await asyncio.gather(
+            _run_phase2(),
+            _run_phase3(),
             return_exceptions=True,
+        )
+
+        # ── Phase 4: Knowledge Graph ────────────────────────────────────
+        await _phase4_knowledge_graph(
+            project_path=project_path,
+            status=status,
+            knowledge_graph=knowledge_graph,
+            expertise_map=phase2_result,
+            decisions=phase3_decisions,
+            supabase_client=supabase_client,
+            project_id=project_id,
         )
 
         logger.info(
             "Indexing job %s fully completed: %d files, %d chunks, "
-            "expertise=%s, decisions=%s (%d found)",
+            "expertise=%s, decisions=%s (%d found), graph=%s (%d nodes)",
             job_id,
             status.files_processed,
             status.chunks_created,
             status.expertise_status,
             status.decision_status,
             status.decisions_found,
+            status.graph_status,
+            status.graph_nodes,
         )
 
     except Exception as exc:
@@ -693,10 +753,11 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
     jobs[job_id] = initial_status
     request.app.state.index_jobs = jobs
 
-    # Collect optional services for Phase 2 & 3
+    # Collect optional services for Phase 2, 3 & 4
     supabase_client = getattr(request.app.state, "supabase_client", None)
     decision_extractor = getattr(request.app.state, "decision_extractor", None)
     decision_service = getattr(request.app.state, "decision_service", None)
+    knowledge_graph = getattr(request.app.state, "knowledge_graph", None)
 
     # Launch background task
     asyncio.create_task(
@@ -711,6 +772,7 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
             supabase_client=supabase_client,
             decision_extractor=decision_extractor,
             decision_service=decision_service,
+            knowledge_graph=knowledge_graph,
         )
     )
 

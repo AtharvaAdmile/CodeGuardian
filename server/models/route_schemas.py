@@ -48,13 +48,37 @@ class SourceRef(BaseModel):
     relevance_score: float = 0.0
 
 
+class DecisionRef(BaseModel):
+    """An architectural decision surfaced in the answer."""
+
+    title: str = ""
+    decision: str = ""
+    source_ref: str = ""
+
+
+class ExpertRef(BaseModel):
+    """A developer identified as an expert for a retrieved file."""
+
+    name: str = ""
+    email: str = ""
+    expertise_score: float = Field(0.0, ge=0.0, le=1.0)
+
+
 class AskResponse(BaseModel):
     """JSON response for POST /api/ask."""
 
     answer: str
     sources: list[SourceRef] = Field(default_factory=list)
     confidence: float = Field(
-        0.0, ge=0.0, le=1.0, description="Mean similarity of top retrieved chunks."
+        0.0, ge=0.0, le=1.0, description="Confidence extracted from LLM or mean chunk similarity."
+    )
+    decisions_referenced: list[DecisionRef] = Field(
+        default_factory=list,
+        description="Architectural decisions relevant to the answer.",
+    )
+    experts: list[ExpertRef] = Field(
+        default_factory=list,
+        description="Primary owners of the retrieved files.",
     )
 
 
@@ -183,6 +207,14 @@ class IndexStatus(BaseModel):
     )
     decisions_commits_processed: int = 0
     decisions_found: int = 0
+
+    # ── Phase 4: Knowledge graph build (background) ─────────────────
+    graph_status: str = Field(
+        "pending",
+        description="One of: pending, running, completed, failed, skipped",
+    )
+    graph_nodes: int = 0
+    graph_edges: int = 0
 
     # ── Errors ──────────────────────────────────────────────────────
     errors: list[str] = Field(default_factory=list)
@@ -386,4 +418,150 @@ class RunGeneratedTestResponse(BaseModel):
     file_path: str = ""
     output: str = ""
     error_message: str | None = None
+    error: str | None = None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Impact Routes
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class ImpactAnalyzeRequest(BaseModel):
+    """POST /api/impact/analyze"""
+
+    project_path: str = Field(..., description="Absolute path to the project root.")
+    file_path: str = Field(
+        ...,
+        description="File that was changed (project-relative or absolute path).",
+    )
+    diff: str | None = Field(
+        None,
+        description=(
+            "Optional unified diff of the change. "
+            "When provided, breaking-change detection runs automatically."
+        ),
+    )
+
+
+class AffectedFileSchema(BaseModel):
+    """A single file in the blast radius, with risk metadata."""
+
+    file_path: str
+    risk_score: float = Field(ge=0.0, le=1.0)
+    distance: int = Field(ge=1)
+    reason: str
+
+
+class ImpactAnalyzeResponse(BaseModel):
+    """Response from POST /api/impact/analyze (BlastRadiusReport)."""
+
+    changed_file: str
+    total_affected: int = 0
+    high_risk: list[AffectedFileSchema] = Field(default_factory=list)
+    medium_risk: list[AffectedFileSchema] = Field(default_factory=list)
+    low_risk: list[AffectedFileSchema] = Field(default_factory=list)
+    affected_modules: list[str] = Field(default_factory=list)
+    suggested_reviewers: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class BreakingChangesRequest(BaseModel):
+    """POST /api/impact/breaking-changes"""
+
+    old_content: str = Field(..., description="Source code of the original version.")
+    new_content: str = Field(..., description="Source code of the modified version.")
+    language: str = Field(
+        ...,
+        description=(
+            "Source language: 'python', 'javascript', 'typescript', "
+            "'js', 'ts', 'jsx', or 'tsx'."
+        ),
+    )
+
+
+class BreakingChangeSchema(BaseModel):
+    """A single detected breaking or non-breaking API change."""
+
+    symbol: str
+    change_type: str
+    severity: str  # "breaking" | "non-breaking"
+    old_signature: str | None = None
+    new_signature: str | None = None
+    description: str
+
+
+class BreakingChangesResponse(BaseModel):
+    """Response from POST /api/impact/breaking-changes."""
+
+    changes: list[BreakingChangeSchema] = Field(default_factory=list)
+    total_breaking: int = 0
+    total_non_breaking: int = 0
+    error: str | None = None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Onboarding Routes
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class OnboardingRequest(BaseModel):
+    """POST /api/onboard/generate"""
+
+    project_id: str
+    task_description: str = Field(..., min_length=1)
+
+
+class LearningStepSchema(BaseModel):
+    """A single step in an onboarding learning path."""
+
+    step_number: int
+    action: str              # "read" | "understand" | "review"
+    file_path: str
+    focus_area: str
+    context: str = ""
+    related_decisions: list[str] = Field(default_factory=list)
+    expert_contact: str | None = None
+
+
+class OnboardingResponse(BaseModel):
+    """Response from POST /api/onboard/generate."""
+
+    learning_path: list[LearningStepSchema] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Review Routes
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class ReviewRequest(BaseModel):
+    """POST /api/review"""
+
+    project_id: str
+    project_path: str = Field("", description="Absolute path to project root (needed for impact analysis).")
+    code: str | None = Field(None, description="Code snippet to review.")
+    file_path: str | None = Field(None, description="File path (PR mode).")
+    diff: str | None = Field(None, description="Unified diff (PR mode).")
+
+
+class FindingSchema(BaseModel):
+    """A single review finding."""
+
+    severity: str = Field(..., description="critical | high | medium | low")
+    category: str = Field(..., description="security | pattern | complexity | impact")
+    message: str
+    file_path: str = ""
+    line: int | None = None
+    suggestion: str = ""
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class ReviewResponse(BaseModel):
+    """Response from POST /api/review."""
+
+    summary: str = ""
+    findings: list[FindingSchema] = Field(default_factory=list)
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    impact_report: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None

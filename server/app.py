@@ -145,6 +145,21 @@ async def lifespan(app: FastAPI):
 
     app.state.decision_extractor = decision_extractor
 
+    # ── Knowledge Graph ─────────────────────────────────────────────────
+    from server.services.knowledge_graph import KnowledgeGraph
+
+    knowledge_graph = KnowledgeGraph()
+
+    # Try to restore a previously-built graph from disk
+    kg_persist_path = ".codeguardian/knowledge_graph.json"
+    loaded = knowledge_graph.load_from_json(kg_persist_path)
+    if loaded:
+        logger.info("✅ Knowledge graph loaded from disk (%s)", kg_persist_path)
+    else:
+        logger.info("ℹ️  Knowledge graph empty — will be populated on first index")
+
+    app.state.knowledge_graph = knowledge_graph
+
     # ── Indexing Job Tracker ────────────────────────────────────────────
     app.state.index_jobs = {}
 
@@ -209,11 +224,20 @@ def create_app() -> FastAPI:
     from server.routes.analysis import router as analysis_router
     from server.routes.indexing import router as indexing_router
     from server.routes.analysis_extended import router as analysis_ext_router
+    from server.routes.impact import router as impact_router
+    from server.routes.onboarding import router as onboarding_router
+    from server.routes.review import router as review_router
 
     app.include_router(health_router)
     app.include_router(query_router)
     app.include_router(analysis_router)
     app.include_router(indexing_router)
     app.include_router(analysis_ext_router)
+    app.include_router(impact_router)
+    app.include_router(onboarding_router)
+    app.include_router(review_router)
 
     return app
+
+
+app = create_app()

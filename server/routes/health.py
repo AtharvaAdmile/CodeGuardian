@@ -64,7 +64,7 @@ async def health_check(request: Request) -> HealthStatus:
 
     components = {
         "vector_store": _check_component(
-            getattr(request.app.state, "vector_store", None)
+            getattr(request.app.state, "vector_service", None)
         ),
         "llm": await _check_llm(request),
         "supabase": _check_component(None),  # Not wired yet

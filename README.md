@@ -1,6 +1,6 @@
 # 🛡️ CodeGuardian
 
-> **AI-powered institutional memory for codebases.** A CLI-first tool with a stunning Electron desktop GUI that surfaces engineering context, audits code health, detects compliance risks, and identifies code experts — all backed by a local-first RAG pipeline and an MCP server for GitHub Copilot integration.
+> **AI-powered institutional memory for codebases.** A CLI-first tool with an Electron desktop GUI that surfaces engineering context, detects compliance risks, identifies code experts, and generates onboarding paths — all backed by NVIDIA NIM and an MCP server for AI assistant integration.
 
 ---
 
@@ -12,132 +12,64 @@
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-  - [Python CLI (cgctl)](#1-python-cli-cgctl)
-  - [Electron Desktop App](#2-electron-desktop-app)
 - [Configuration](#configuration)
 - [CLI Usage (cgctl)](#cli-usage-cgctl)
-  - [init](#cgctl-init)
-  - [index](#cgctl-index)
-  - [ask](#cgctl-ask)
-  - [audit](#cgctl-audit)
-  - [serve](#cgctl-serve)
-  - [config](#cgctl-config)
 - [Desktop App](#desktop-app)
-  - [Running the App](#running-the-app)
-  - [Features](#desktop-features)
-  - [IPC Architecture](#ipc-architecture)
 - [MCP Server](#mcp-server)
-  - [Available Tools](#available-mcp-tools)
-  - [VS Code / GitHub Copilot Integration](#vs-code--github-copilot-integration)
-- [Core Python Modules](#core-python-modules)
-- [Analysis Modules](#analysis-modules)
-- [Documentation Generator](#documentation-generator)
-- [Test Generator](#test-generator)
-- [Database Layer (Supabase)](#database-layer-supabase)
-- [Development](#development)
+- [Server Services](#server-services)
+- [LangGraph Agents](#langgraph-agents)
+- [Running Tests](#running-tests)
 - [License](#license)
 
 ---
 
 ## Overview
 
-CodeGuardian is a **developer intelligence platform** that turns your codebase into a searchable, auditable knowledge base. It combines:
+CodeGuardian preserves and surfaces the institutional knowledge behind a codebase — the **why** behind architectural decisions, who owns what, and the blast radius of any change. It indexes your code once and lets developers query that context through a CLI, a desktop app, or directly from their AI assistant via MCP.
 
-- A **local RAG pipeline** (ChromaDB + sentence-transformers) for semantic code search without sending code to the cloud
-- A **Google Gemini-powered LLM layer** for Q&A, documentation generation, and test generation
-- An **MCP (Model Context Protocol) server** that plugs CodeGuardian's tools directly into GitHub Copilot / VS Code
-- A **`cgctl` CLI** for terminal-first workflows (init, index, ask, audit, serve)
-- An **Electron + React + D3.js desktop app** providing an interactive codebase graph and sidebar analysis tools
+Everything runs through a central **FastAPI hub on port 8742**. The CLI, the Electron desktop app, and the MCP server are all thin HTTP clients — no LLM or embedding work is done client-side.
 
 ---
 
 ## Features
 
-### 🔍 Semantic Code Search (RAG)
-- Index any Python/JS/TS/JSX/TSX codebase with local `sentence-transformers` embeddings
-- Query your codebase in natural language; get back ranked, source-cited code chunks
-- Re-ranking for improved relevance; no data leaves your machine
-
-### 📊 Codebase Intelligence
-| Feature | Description |
-|---|---|
-| ❤️ **File Health Score** | Combines cyclomatic complexity (Radon) + git churn into a 0–100 score |
-| 🛡️ **Compliance Scanner** | Detects PII exposure, hardcoded secrets, dangerous function calls |
-| 👥 **Code Experts** | Identifies file owners with recency-weighted git scoring |
-| 📜 **Git History** | Commit history + blame for files or specific line ranges |
-| ⚡ **Runtime Stats** | Reads a `runtime_stats.json` fed by your CI/CD for production telemetry |
-| 📐 **Structure Analyzer** | Organization score, file distribution, directory structure analysis |
-
-### 📝 AI Documentation Generator
-- Multi-agent pipeline: Analysis → Context → Documentation → Review
-- Supports docstring injection, Markdown export, and HTML export
-- Gap detection with quality scoring per function/class
-
-### 🧪 AI Test Generator
-- Analyzes files for testable functions/classes with complexity scores
-- Generates pytest (Python) or Jest (JS/TS) unit tests via Gemini
-- Saves tests to `generated_test_cases/` with mirrored directory structure
-- Can run generated tests and return pass/fail results
-
-### 🖥️ Electron Desktop App
-- Interactive force-directed codebase dependency graph powered by D3.js
-- Sidebar with per-file analysis actions (health, compliance, experts, history)
-- Slide-in results pane with smart grouping and line-range formatting
-- Dark glassmorphism theme with micro-animations
-
-### 🔌 MCP Server (GitHub Copilot Integration)
-- Exposes 13+ CodeGuardian tools as MCP-compatible functions
-- Plugs directly into GitHub Copilot via VS Code settings
-- Runs locally, zero external API calls for search
+- **Semantic Q&A** — Ask natural-language questions; get answers grounded in code chunks, architectural decisions, and author expertise
+- **Knowledge Graph** — NetworkX `DiGraph` linking files, functions, decisions, authors, and modules; rebuilt on every index
+- **Impact Analysis** — Blast-radius report for any changed file: transitive dependents, risk scores, suggested reviewers
+- **Decision Extraction** — LLM parses the last 50 commits to extract and store architectural decisions
+- **Code Review** — Multi-stage LangGraph agent: security scan, complexity via `radon`, pattern check, impact summary
+- **Onboarding Paths** — LangGraph agent converts a plain-text task description into an ordered learning path
+- **Expertise Map** — `git blame` + commit analysis to identify who knows each file best
+- **MCP Integration** — Exposes 9 tools to any MCP-compatible AI assistant (Claude Code, etc.)
+- **Offline-capable CLI** — `--offline` flag bypasses the HTTP layer and imports Python services directly
 
 ---
 
 ## Architecture
 
+All three clients talk exclusively to the FastAPI backend over HTTP. No client touches the database or LLM directly.
+
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                     CodeGuardian Platform                        │
-│                                                                  │
-│  ┌─────────────┐    ┌─────────────────┐    ┌─────────────────┐  │
-│  │  cgctl CLI  │    │  Electron App   │    │  MCP Server     │  │
-│  │  (Typer +   │    │  (React + D3 +  │    │  (FastMCP via   │  │
-│  │   Rich)     │    │   Vite + TS)    │    │   Python MCP)   │  │
-│  └──────┬──────┘    └────────┬────────┘    └────────┬────────┘  │
-│         │                    │ IPC (Electron)        │           │
-│         └────────────────────┴──────────────────────┘           │
-│                              │                                   │
-│                    ┌─────────▼──────────┐                        │
-│                    │   src/ Core Engine │                        │
-│                    │                   │                        │
-│                    │  EmbeddingGen     │  ← sentence-transformers│
-│                    │  VectorStore      │  ← ChromaDB (local)    │
-│                    │  QueryEngine      │  ← RAG + reranking     │
-│                    │  CodeParser       │  ← AST parsing         │
-│                    │  StructureAnalyzer│  ← Radon complexity    │
-│                    └─────────┬─────────┘                        │
-│                              │                                   │
-│           ┌──────────────────┼──────────────────┐               │
-│           │                  │                  │               │
-│  ┌────────▼──────┐  ┌────────▼──────┐  ┌───────▼────────┐      │
-│  │ src/analysis/ │  │src/documentation│  │ src/testing/  │      │
-│  │  git_context  │  │  orchestrator   │  │  test_gen     │      │
-│  │  expertise    │  │  analysis_agent │  │  test_runner  │      │
-│  │  compliance   │  │  gap_detector   │  │  test_analyzer│      │
-│  │  runtime      │  │  export/        │  └───────────────┘      │
-│  └───────────────┘  └─────────────────┘                        │
-│                                                                  │
-│  ┌───────────────────────────────────────────────┐              │
-│  │  src/db/  →  Supabase (PostgreSQL + pgvector)  │              │
-│  │  (queries.py, supabase_client.py, schema.sql)  │              │
-│  └───────────────────────────────────────────────┘              │
-└──────────────────────────────────────────────────────────────────┘
+cgctl CLI ──────────────┐
+Desktop Electron App ───┼──→  FastAPI server (:8742) ──→ NVIDIA NIM API
+MCP Server (stdio/SSE) ─┘         │
+                                   ├──→ ChromaDB (local, always)
+                                   ├──→ Supabase pgvector (optional)
+                                   └──→ .codeguardian/ (JSON persistence)
 ```
 
-**LLM**: Google Gemini (`gemini-2.0-flash`) via `google-generativeai`  
-**Local Embeddings**: `sentence-transformers` + `text-embedding-004` (Gemini)  
-**Vector Store**: ChromaDB (local persistence in `chroma_data/`)  
-**Database**: Supabase (PostgreSQL + pgvector) — optional, for the full cloud-backed variant  
-**Desktop**: Electron 28 + React 18 + Vite 5 + D3.js v7 + TypeScript
+### Indexing Pipeline (4 phases)
+
+`POST /api/index` starts a background job. Phase 1 completes fast (code is immediately searchable); Phases 2–4 run concurrently in the background:
+
+| Phase | Work |
+|-------|------|
+| 1 | Walk files → AST chunk (Python) or regex chunk (JS/TS) → NIM embeddings (batches of 32) → upsert to ChromaDB + Supabase |
+| 2 | `git blame` → expertise map (author → files) |
+| 3 | Last 50 commits → LLM decision extraction → stored in DecisionService |
+| 4 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
+
+Poll progress at `GET /api/index/status/{job_id}`.
 
 ---
 
@@ -145,581 +77,389 @@ CodeGuardian is a **developer intelligence platform** that turns your codebase i
 
 ```
 CG_2/
-├── cgctl/                        # CLI package (pip-installable as 'cgctl')
-│   ├── main.py                   # Typer app entry point
-│   ├── commands/
-│   │   ├── init.py               # cgctl init
-│   │   ├── index.py              # cgctl index
-│   │   ├── ask.py                # cgctl ask
-│   │   ├── audit.py              # cgctl audit
-│   │   ├── serve.py              # cgctl serve (MCP server)
-│   │   └── config.py             # cgctl config
-│   └── utils/
-│       ├── output.py             # Rich console helpers
-│       └── validators.py         # Input validation
+├── server/                        # FastAPI backend (the hub)
+│   ├── app.py                     # Application factory + lifespan
+│   ├── config.py                  # Pydantic-settings config
+│   ├── mcp_server.py              # Standalone MCP server (stdio / SSE)
+│   ├── agents/
+│   │   ├── review_agent.py        # LangGraph: security + complexity review
+│   │   └── onboarding_agent.py    # LangGraph: task → learning path
+│   ├── routes/
+│   │   ├── health.py
+│   │   ├── indexing.py
+│   │   ├── query.py
+│   │   ├── analysis.py
+│   │   ├── analysis_extended.py
+│   │   ├── impact.py
+│   │   ├── review.py
+│   │   └── onboarding.py
+│   └── services/
+│       ├── llm_client.py          # NIMClient — sole LLM interface
+│       ├── embedding_service.py   # NIMEmbeddingService (1024-dim)
+│       ├── vector_service.py      # ChromaDB + optional Supabase
+│       ├── knowledge_graph.py     # NetworkX DiGraph builder
+│       ├── decision_service.py    # Store / retrieve architectural decisions
+│       ├── decision_extractor.py  # LLM extracts decisions from git log
+│       ├── git_service.py         # git blame, log, diff helpers
+│       └── impact_engine.py       # Blast-radius calculator
 │
-├── src/                          # Core Python engine
-│   ├── mcp_server.py             # FastMCP server (13+ tools)
-│   ├── codebase_indexer.py       # File scanning + indexing pipeline
-│   ├── embedding_generator.py    # Local sentence-transformer embeddings
-│   ├── vector_store.py           # ChromaDB wrapper
-│   ├── query_engine.py           # RAG retrieval + reranking
-│   ├── code_parser.py            # AST-based code parsing (Python/JS/TS)
-│   ├── structure_analyzer.py     # Project structure + complexity (Radon)
-│   ├── text_chunker.py           # Token-aware code chunking
-│   ├── conversation_manager.py   # Multi-turn conversation history
-│   ├── progress_tracker.py       # Indexing progress callbacks
-│   ├── input_validator.py        # Input sanitization
-│   ├── file_validator.py         # File type + size validation
-│   ├── analysis/                 # Advanced code intelligence
-│   │   ├── git_context.py        # Git history + blame (GitPython)
-│   │   ├── expertise.py          # Code owner scoring (recency-weighted)
-│   │   ├── compliance.py         # PII/secrets/dangerous-function scanner
-│   │   ├── regulatory_scanner.py # Regulatory compliance (HIPAA, etc.)
-│   │   └── runtime.py            # Production telemetry loader
-│   ├── documentation/            # AI documentation generator
-│   │   ├── orchestrator.py       # Multi-agent pipeline coordinator
-│   │   ├── analysis_agent.py     # Code element extraction
-│   │   ├── context_agent.py      # RAG-based context enrichment
-│   │   ├── gap_detector.py       # Documentation gap detection
-│   │   ├── dependency_analyzer.py# Import/call-graph analysis
-│   │   ├── template_engine.py    # Jinja2 doc templates
-│   │   ├── review_manager.py     # Human-in-the-loop review
-│   │   ├── error_handler.py      # Retry + error recovery
-│   │   └── export/
-│   │       ├── docstring_writer.py # Injects docstrings into source
-│   │       ├── markdown_writer.py  # Exports to Markdown
-│   │       └── html_writer.py      # Exports to HTML
-│   ├── testing/                  # AI test generator
-│   │   ├── test_analyzer.py      # Identifies testable code elements
-│   │   ├── test_generator.py     # Gemini-powered test generation
-│   │   ├── test_orchestrator.py  # End-to-end test gen pipeline
-│   │   ├── test_runner.py        # pytest / jest runner
-│   │   └── test_validator.py     # Validates generated test code
-│   ├── db/                       # Supabase / PostgreSQL layer
-│   │   ├── supabase_client.py    # Supabase connection + auth
-│   │   ├── queries.py            # SQL query helpers
-│   │   └── schema.sql            # Database schema (pgvector tables)
-│   ├── config/                   # Config loader
-│   ├── core/                     # Shared error handler
-│   └── models/                   # Pydantic data models
-│       ├── documentation_models.py
-│       └── testing_models.py
+├── cgctl/                         # CLI (thin HTTP client)
+│   ├── main.py                    # Typer entry point
+│   ├── client.py                  # CGClient (synchronous httpx)
+│   ├── state.py                   # Global --offline / --api-url state
+│   └── commands/
+│       ├── init.py
+│       ├── index.py
+│       ├── ask.py
+│       ├── context.py
+│       ├── impact.py
+│       ├── review.py
+│       ├── onboard.py
+│       ├── health.py
+│       ├── serve.py
+│       ├── config.py
+│       └── audit.py
 │
-├── desktop-app/                  # Electron + React + Vite desktop app
-│   ├── electron/
-│   │   ├── main.ts               # Electron main process + IPC handlers
-│   │   └── preload.ts            # Secure IPC bridge (contextBridge)
-│   ├── src/
-│   │   ├── App.tsx               # Root React component + layout
-│   │   ├── main.tsx              # React entry point
-│   │   ├── index.css             # Global styles, design tokens
-│   │   ├── components/
-│   │   │   ├── ActionsPane.tsx   # Sidebar + slide-in results pane
-│   │   │   └── SettingsPane.tsx  # Settings panel
-│   │   ├── views/
-│   │   │   └── GraphDashboard.tsx# D3.js force-directed codebase graph
-│   │   └── context/              # React context providers
-│   ├── package.json
-│   ├── tsconfig.json             # TypeScript config (React)
-│   ├── tsconfig.electron.json    # TypeScript config (Electron main)
-│   ├── tsconfig.node.json        # TypeScript config (Node utilities)
-│   └── vite.config.ts            # Vite build config
+├── desktop-app/                   # Electron + React + Vite
+│   ├── electron/main.ts           # Electron main process
+│   └── src/
+│       ├── App.tsx                # Router + ProjectContext
+│       ├── pages/                 # 9 full-page views
+│       │   ├── Dashboard.tsx
+│       │   ├── QnA.tsx
+│       │   ├── KnowledgeGraph.tsx
+│       │   ├── ImpactAnalyzer.tsx
+│       │   ├── Onboarding.tsx
+│       │   ├── CodeReview.tsx
+│       │   ├── FileExplorer.tsx
+│       │   ├── Indexing.tsx
+│       │   └── Settings.tsx
+│       ├── components/
+│       │   ├── layout/            # Sidebar, TopBar, CommandPalette
+│       │   └── shared/            # LoadingSpinner, etc.
+│       └── hooks/                 # useProject, API hooks
 │
-├── docs/                         # Project documentation
-│   ├── INDEX.md
-│   ├── DOCUMENTATION_GENERATOR_GUIDE.md
-│   ├── configuration-examples.md
-│   └── screenshots/
-│
-├── rules/
-│   └── compliance.yaml           # Custom compliance scan rules
-│
-├── config.toml                   # Project-wide configuration
-├── setup.py                      # pip package setup
-├── requirements.txt              # Python dependencies
-├── .env.example                  # Environment variable template
-├── .codeguardian                 # Project marker file (auto-created by cgctl init)
-└── runtime_stats.json            # Optional CI/CD telemetry feed
+├── tests/                         # pytest test suite
+├── .env.example                   # Environment variable template
+├── requirements.txt
+└── CLAUDE.md                      # AI assistant guidance
 ```
 
 ---
 
 ## Prerequisites
 
-| Requirement | Version |
-|---|---|
-| Python | 3.9+ (3.10–3.12 recommended) |
-| Node.js | 18+ |
-| npm | 9+ |
-| Git | Any recent version |
-| Google Gemini API Key | Required for AI features |
+- Python 3.11+
+- Node.js 18+ and npm (desktop app only)
+- **NVIDIA NIM API Key** — get one at [build.nvidia.com](https://build.nvidia.com)
+- Git (required for expertise mapping and decision extraction)
 
 ---
 
 ## Installation
 
-### 1. Python CLI (`cgctl`)
+### 1. Python backend + CLI
 
 ```bash
-# Clone the repository
-git clone <repo-url>
-cd CG_2
+git clone https://github.com/your-org/codeguardian.git
+cd codeguardian
 
-# Create a virtual environment (recommended)
-python -m venv .venv
-source .venv/bin/activate   # macOS/Linux
-# .venv\Scripts\activate    # Windows
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 
-# Install in editable mode
-pip install -e .
-
-# Install all dependencies
 pip install -r requirements.txt
-
-# Verify installation
-cgctl --version
 ```
 
-### 2. Electron Desktop App
+### 2. Electron desktop app
 
 ```bash
-# Navigate to the desktop app directory
 cd desktop-app
-
-# Install Node.js dependencies
 npm install
-
-# Start in development mode (hot-reload Vite + Electron)
-npm run dev
 ```
 
 ---
 
 ## Configuration
 
-### Environment Variables
+Copy `.env.example` to `.env` and fill in your values:
 
-Copy the template and fill in your values:
+```env
+# NVIDIA NIM (required — all LLM and embedding calls)
+NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NVIDIA_NIM_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_LLM_MODEL=qwen/qwen3-coder-480b-a35b-instruct
+NVIDIA_EMBED_MODEL=nvidia/nv-embedqa-e5-v5
 
-```bash
-cp .env.example .env
-```
+# Server
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8742
 
-**Required:**
-```bash
-GOOGLE_API_KEY=your_gemini_api_key_here
-```
+# ChromaDB (local vector store — always required)
+CHROMADB_PERSIST_DIR=./chroma_data
 
-**Optional (Supabase — for cloud DB variant):**
-```bash
+# Supabase (optional — enables persistent pgvector storage)
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Logging
+LOG_LEVEL=INFO
 ```
 
-### `config.toml`
-
-The `config.toml` at the project root controls all default settings:
-
-```toml
-[llm]
-provider = "gemini"
-model = "gemini-2.0-flash"
-temperature = 0.7
-max_tokens = 2048
-
-[embedding]
-model = "models/text-embedding-004"
-dimension = 768
-batch_size = 32
-
-[indexing]
-exclude_dirs = [".git", "__pycache__", "node_modules", ...]
-supported_extensions = [".py", ".js", ".jsx", ".ts", ".tsx"]
-
-[chunking]
-min_chunk_tokens = 100
-max_chunk_tokens = 500
-overlap_tokens = 50
-
-[retrieval]
-initial_count = 10
-final_count = 5
-similarity_threshold = 0.7
-
-[agent]
-blast_radius_threshold = 5
-require_approval_above = 5
-```
+All features work with ChromaDB only. Supabase adds persistent cloud storage.
 
 ---
 
-## CLI Usage (`cgctl`)
+## CLI Usage (cgctl)
 
-### `cgctl init`
-
-Initialize a new CodeGuardian project in a directory. Creates the `.codeguardian` marker file.
+Start the server first (required for all commands except `--offline` mode):
 
 ```bash
-# Initialize in the current directory
-cgctl init .
+# Start the server
+python -m cgctl.main serve
 
-# Initialize a specific path with a custom name
-cgctl init /path/to/my-project --name "MyProject"
+# Or with uvicorn directly
+uvicorn server.app:app --host 0.0.0.0 --port 8742
+
+# Dev mode with auto-reload
+python -m cgctl.main serve --reload
 ```
 
-### `cgctl index`
+Global flags available on every command:
 
-Scan and index all supported source files (`*.py`, `*.js`, `*.ts`, `*.jsx`, `*.tsx`) into the local ChromaDB vector store using sentence-transformer embeddings.
-
-```bash
-# Index the current directory
-cgctl index .
-
-# Force re-index (clears existing embeddings)
-cgctl index /path/to/project --force
+```
+--offline       Run in offline mode (direct Python imports, no HTTP)
+--api-url URL   API server URL (default: http://localhost:8742)
 ```
 
-> **Note:** You must run `cgctl init` before `cgctl index`.
+### Commands
 
-### `cgctl ask`
-
-Semantic search across your indexed codebase in natural language.
+#### `cgctl init`
+Initialize a new CodeGuardian project in the current directory.
 
 ```bash
-# Basic query
-cgctl ask "What does the authentication module do?"
-
-# Control number of results
-cgctl ask "database connection pooling" --top-k 10
-
-# JSON output for scripting
-cgctl ask "error handling" --json
-
-# Search in a specific project
-cgctl ask "how is rate limiting implemented?" --path /path/to/project
-
-# Pipe raw context to clipboard (macOS)
-cgctl ask context "authentication" | pbcopy
+python -m cgctl.main init
 ```
 
-### `cgctl audit`
-
-Run a comprehensive audit on a single file: expertise, health score, compliance, runtime stats, and git history.
+#### `cgctl index`
+Index a codebase into the vector store. Walks `.py`, `.js`, `.ts`, `.jsx`, `.tsx` files. Skips `node_modules`, `__pycache__`, `.git`, `venv`, `dist`, `build`.
 
 ```bash
-# Audit a file
-cgctl audit src/mcp_server.py
-
-# Disable specific sections
-cgctl audit src/query_engine.py --no-git --no-runtime
-cgctl audit file src/embedding_generator.py --no-compliance
+python -m cgctl.main index /path/to/project
 ```
 
-**Output includes:**
-- 👤 **Expertise**: Primary and backup code owners with expertise scores
-- 📊 **Health Score**: 0–100 score combining cyclomatic complexity + git churn
-- 🔒 **Compliance**: PII, secrets, and dangerous function detections with severity
-- ⚡ **Runtime**: Error rate, average latency, p99 latency (from `runtime_stats.json`)
-- 📜 **Git History**: Last 5 commits + churn risk level
-
-### `cgctl serve`
-
-Start the MCP server for GitHub Copilot / VS Code integration.
+#### `cgctl ask`
+Ask a natural-language question about the indexed codebase.
 
 ```bash
-# Start with stdio transport (default, for VS Code)
-cgctl serve
-
-# Start with SSE transport on a specific port
-cgctl serve --transport sse --port 8765
+python -m cgctl.main ask "Why is authentication handled in middleware?"
+python -m cgctl.main ask "Who owns the payment module?"
 ```
 
-### `cgctl config`
-
-View and manage project configuration.
+#### `cgctl context`
+Get full context for a specific file: purpose, owners, architectural decisions, and dependents.
 
 ```bash
-# Show current config
-cgctl config show
+python -m cgctl.main context server/routes/query.py
+```
 
-# Set a value
-cgctl config set llm.model gemini-2.0-flash
+#### `cgctl impact`
+Show the blast radius for a changed file — which files transitively depend on it and their risk scores.
+
+```bash
+python -m cgctl.main impact server/services/vector_service.py
+```
+
+#### `cgctl review`
+Run a multi-stage code review on a file or diff. Checks security patterns, complexity, and blast radius.
+
+```bash
+python -m cgctl.main review server/routes/indexing.py
+python -m cgctl.main review --diff path/to/changes.diff
+```
+
+#### `cgctl onboard`
+Generate an ordered learning path for a developer picking up a new task.
+
+```bash
+python -m cgctl.main onboard "Add rate limiting to the API"
+```
+
+#### `cgctl health`
+Check server health and report which services are active.
+
+```bash
+python -m cgctl.main health
+```
+
+#### `cgctl serve`
+Start the FastAPI server. Optionally run as an MCP server instead.
+
+```bash
+python -m cgctl.main serve               # REST API on :8742
+python -m cgctl.main serve --reload      # Dev mode with auto-reload
+python -m cgctl.main serve --mcp         # MCP server (stdio)
+python -m cgctl.main serve --mcp-sse     # MCP server (SSE on :8743)
+```
+
+#### `cgctl config`
+Manage project configuration settings.
+
+```bash
+python -m cgctl.main config show
+python -m cgctl.main config set KEY VALUE
+```
+
+#### `cgctl audit`
+Run a code audit across the indexed project.
+
+```bash
+python -m cgctl.main audit
 ```
 
 ---
 
 ## Desktop App
 
-The Electron desktop app provides a visual, interactive interface for CodeGuardian's analysis capabilities.
+The desktop app is an Electron + React + Vite application. It communicates with the FastAPI server over HTTP — no direct Python or database access from the renderer.
 
-### Running the App
+### Running
 
 ```bash
+# Requires server running on :8742
 cd desktop-app
-
-# Development (hot-reload)
-npm run dev
-
-# Type-check the entire project
-npm run typecheck
-
-# Build for production
-npm run build
-
-# Package as distributable (macOS .dmg, Windows .exe, Linux .AppImage)
-npm run build:electron
+npm run dev          # Vite + Electron in development mode
+npm run build        # Production build
+npm run typecheck    # TypeScript type check
 ```
 
-> **Important:** The CodeGuardian Python backend must be installed (`pip install -e .`) and the target project must be initialized (`cgctl init`) and indexed (`cgctl index`) before using the desktop app's analysis features.
+### Pages
 
-### Desktop Features
+| Route | Page | Description |
+|-------|------|-------------|
+| `/` | Dashboard | Project overview, health status, recent activity |
+| `/ask` | Q&A | Natural-language query interface with source citations |
+| `/graph` | Knowledge Graph | D3.js interactive graph of files, functions, decisions, authors |
+| `/impact` | Impact Analyzer | Blast-radius visualiser for file changes |
+| `/onboard` | Onboarding | Learning path generator for new tasks |
+| `/review` | Code Review | Multi-stage review with security and complexity findings |
+| `/files` | File Explorer | Browse indexed files and their context |
+| `/indexing` | Indexing | Kick off and monitor index jobs |
+| `/settings` | Settings | Server URL, project configuration |
 
-#### 🗺️ Interactive Codebase Graph
-- **Force-Directed Visualization**: Browse your entire codebase as an interactive dependency graph powered by D3.js
-- **Zoom & Pan**: Smooth interactions for large codebases
-- **Smart Node Sizing**: Folders display with labels inside; files are sized by byte count
-- **Double-click to Reset**: Re-centers and rescales the view
-
-#### 🎛️ Action Sidebar
-A persistent floating sidebar with per-file analysis tools:
-
-| Button | Action |
-|---|---|
-| ❤️ File Health | Tech debt score (complexity + churn) |
-| 🛡️ Compliance Scanner | PII, secrets, dangerous code detection |
-| 👥 Code Experts | File owner identification with scores |
-| 📜 Git History | Commit history and blame for selected files |
-
-#### 📊 Results Pane
-- Slide-in panel from the left triggered by sidebar actions
-- Smart grouping of compliance violations by message + severity
-- Formatted line ranges (e.g., "Lines 130, 132–136, 140")
-- Selected-file pill indicator always visible at bottom
-
-#### ⚙️ Settings Pane
-- Set the active project path
-- Update the Google Gemini API key (written directly to the project's `.env` file)
-- Trigger project initialization and indexing
-
-### IPC Architecture
-
-The app uses Electron's IPC (Inter-Process Communication):
+### Architecture
 
 ```
-React Renderer          Electron Main Process (Node.js)      Python Backend
-     │                             │                              │
-     │ window.cgctl.getFileHealth()│                              │
-     │────────────────────────────►│                              │
-     │                             │ spawn python3 -c             │
-     │                             │ "from src.mcp_server         │
-     │                             │  import get_file_health..."  │
-     │                             │─────────────────────────────►│
-     │                             │       JSON result            │
-     │                             │◄─────────────────────────────│
-     │           JSON result       │                              │
-     │◄────────────────────────────│                              │
+Electron main process (electron/main.ts)
+    └── exposes window.cgctl IPC bridge (selectDirectory, etc.)
+
+React renderer (src/)
+    ├── BrowserRouter with 9 page routes
+    ├── ProjectContext — tracks active project, health, index status
+    └── HTTP calls → FastAPI :8742 (no direct DB or LLM access)
 ```
-
-**IPC Channels exposed via `window.cgctl`:**
-
-| Channel | Description |
-|---|---|
-| `cgctl:init` | Initialize a project |
-| `cgctl:index` | Index a project |
-| `cgctl:analyzeStructure` | Get structure analysis |
-| `cgctl:getFileHealth` | Get a file's health score |
-| `cgctl:checkCompliance` | Run standard compliance scan |
-| `cgctl:checkRegulatoryCompliance` | Run regulatory compliance scan |
-| `cgctl:getFileExpert` | Find code owner for a file |
-| `cgctl:getFileHistory` | Get git history for a file |
-| `cgctl:findDependencies` | Analyze file dependencies |
-| `cgctl:analyzeProjectDependencies`| Build full project dependency graph |
-| `cgctl:detectDocumentationGaps` | Find undocumented code |
-| `cgctl:analyzeTestability` | Find testable elements |
-| `cgctl:queryCodebase` | Semantic code search |
-| `cgctl:runTests` | Execute pytest |
-| `cgctl:generateTestCase` | AI-generate unit tests |
-| `cgctl:runLocalTest` | Run a generated test file |
-| `cgctl:updateApiKey` | Update `.env` with new API key |
-| `fs:listFiles` | List project files |
-| `fs:readFile` | Read file content |
-| `fs:saveTestFile` | Save generated test to disk |
-| `fs:testFileExists` | Check if test file already exists |
 
 ---
 
 ## MCP Server
 
-The MCP server (`src/mcp_server.py`) exposes CodeGuardian's full analysis capabilities as tools consumable by GitHub Copilot and other MCP-compatible AI assistants.
+The MCP server exposes CodeGuardian's capabilities as tools to any MCP-compatible AI assistant. It is a thin HTTP proxy — all tools delegate to the FastAPI server on `:8742`.
 
-### Available MCP Tools
+### Setup
 
-| Tool | Description |
-|---|---|
-| `query_codebase` | Semantic RAG search over the indexed codebase |
-| `analyze_structure` | Project structure score, file counts, git status |
-| `find_dependencies` | Imports, function calls, and inheritance for a file |
-| `analyze_project_dependencies` | Full project dependency graph (nodes + links) |
-| `analyze_testability` | Find testable elements with complexity + RAG context |
-| `run_tests` | Execute pytest and return pass/fail results |
-| `generate_unit_test` | AI-generate unit tests for a source file |
-| `run_generated_test` | Execute a previously generated test file |
-| `detect_documentation_gaps` | Find undocumented functions/classes with quality scores |
-| `get_file_history` | Git commit history + churn for a file or line range |
-| `get_file_expert` | Code owner identification with expertise scores |
-| `check_compliance` | Scan code snippet for PII, secrets, dangerous APIs |
-| `check_regulatory_compliance` | Regulatory compliance scan (HIPAA-style rules) |
-| `get_file_health` | Composite tech debt score (complexity + churn) |
-| `get_runtime_stats` | Production telemetry for a file from `runtime_stats.json` |
-
-### VS Code / GitHub Copilot Integration
-
-Add to your VS Code `settings.json`:
+Add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
 
 ```json
 {
-  "github.copilot.chat.experimental.mcpServers": {
+  "mcpServers": {
     "codeguardian": {
-      "command": "cgctl",
-      "args": ["serve"],
-      "cwd": "/path/to/your/project"
+      "command": "python",
+      "args": ["-m", "server.mcp_server"],
+      "cwd": "/path/to/codeguardian"
     }
   }
 }
 ```
 
-Then in GitHub Copilot Chat, you can use `@codeguardian` and reference any tool. Example prompts:
-- *"Use `query_codebase` to find all authentication-related code"*
-- *"Call `get_file_health` on `src/query_engine.py` and explain the results"*
-- *"Run `generate_unit_test` on the `EmbeddingGenerator` class"*
-
----
-
-## Core Python Modules
-
-| Module | Purpose |
-|---|---|
-| `src/codebase_indexer.py` | Walks the project directory, reads files, chunks them, and stores embeddings in ChromaDB |
-| `src/embedding_generator.py` | Wraps `sentence-transformers` (`all-MiniLM-L6-v2`) for local embedding generation |
-| `src/vector_store.py` | ChromaDB client wrapper; handles collection creation, upsert, and vector similarity search |
-| `src/query_engine.py` | Orchestrates embedding generation → vector search → reranking for RAG queries |
-| `src/code_parser.py` | AST-based parser for Python and regex-based parser for JS/TS to extract functions, classes, imports |
-| `src/text_chunker.py` | Token-aware chunking with configurable min/max/overlap tokens |
-| `src/structure_analyzer.py` | Analyzes project structure; uses Radon for cyclomatic complexity; computes file health scores |
-| `src/conversation_manager.py` | Manages multi-turn conversation history for context-aware Q&A |
-
----
-
-## Analysis Modules
-
-### `src/analysis/git_context.py` — `GitContextAnalyzer`
-Uses GitPython to extract commit history, per-line blame, and churn counts for any file or line range.
-
-### `src/analysis/expertise.py` — `ExpertiseTracker`
-Calculates recency-weighted expertise scores for each contributor per file. Returns primary expert, backup expert, and last-active timestamp.
-
-### `src/analysis/compliance.py` — `ComplianceScanner`
-Pattern-based scanner that detects:
-- **PII exposure** (emails, phone numbers, SSNs in code strings)
-- **Hardcoded secrets** (API keys, passwords, tokens)
-- **Dangerous functions** (eval, exec, pickle.loads, etc.)
-- Severity levels: `critical`, `high`, `medium`, `low`
-
-### `src/analysis/regulatory_scanner.py`
-Loads custom rules from `rules/compliance.yaml` for domain-specific compliance (e.g., HIPAA logging requirements).
-
-### `src/analysis/runtime.py` — `RuntimeLoader`
-Reads `runtime_stats.json` to surface production telemetry (error rate, avg latency, p99, last error) per file.
-
----
-
-## Documentation Generator
-
-The documentation generator lives in `src/documentation/` and uses a multi-agent pipeline:
-
-1. **`AnalysisAgent`** — Parses files, extracts code elements (functions, classes), scores documentation gaps
-2. **`ContextAgent`** — Enriches each element with related code context from the RAG index
-3. **`DocumentationAgent`** — Calls Gemini to generate docstrings/documentation for each gap
-4. **`ReviewManager`** — Presents generated docs for human-in-the-loop review/approval
-5. **`ExportModule`** — Writes approved docs as:
-   - Docstring injection back into source files
-   - Markdown documentation files
-   - Standalone HTML documentation pages
-
----
-
-## Test Generator
-
-The test generator lives in `src/testing/`:
-
-1. **`TestAnalyzer`** — Scans a file for testable functions and classes, scores by complexity
-2. **`TestGenerator`** — Uses Gemini to generate `pytest` or `jest` test code with mocking and edge cases
-3. **`TestOrchestrator`** — End-to-end pipeline: analyze → generate → validate → save
-4. **`TestRunner`** — Executes `pytest` subprocess and parses pass/fail per file
-5. **`TestValidator`** — Basic syntax validation of generated test code before saving
-
-Generated tests are saved to `generated_test_cases/` (mirroring the source tree structure).
-
----
-
-## Database Layer (Supabase)
-
-`src/db/` provides an optional Supabase (PostgreSQL + pgvector) integration:
-
-- **`supabase_client.py`** — Supabase Python client wrapper with connection management
-- **`queries.py`** — Helper functions for vector similarity search, chunk storage, project metadata
-- **`schema.sql`** — Full PostgreSQL schema with pgvector tables for code chunks and embeddings
-
-> The primary local vector store is ChromaDB (zero-config). Supabase is used for the cloud-backed multi-user variant when `SUPABASE_URL` and `SUPABASE_KEY` are set.
-
----
-
-## Development
-
-### Running Tests
+### Transport modes
 
 ```bash
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/test_query_engine.py -v
+python -m server.mcp_server              # stdio (default, for Claude Code)
+python -m server.mcp_server --sse        # SSE on :8743
+python -m server.mcp_server --sse --port 9000   # custom port
 ```
 
-### Type Checking (Desktop App)
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `query_codebase` | Ask any natural-language question; returns answer with sources, decisions, and experts |
+| `get_context_for_file` | Full context for a file: purpose, owners, decisions, dependents |
+| `get_decision_history` | All architectural decisions affecting a file, plus git commit timeline |
+| `get_expertise` | Who knows a file best: ranked contributors with commit counts and ownership % |
+| `analyze_impact` | Blast-radius report: transitive dependents, risk scores, suggested reviewers |
+| `review_code` | Multi-stage review: security, complexity, patterns, impact |
+| `check_compliance` | Security and compliance scan only (secrets, SQL injection, PII logging) |
+| `generate_onboarding_path` | Ordered learning path for a developer picking up a new task |
+| `check_breaking_changes` | AST-based detection of removed functions, added required params, changed signatures |
+
+---
+
+## Server Services
+
+All services are initialized on `app.state` during startup and are `None` if their prerequisites are missing. Every feature degrades gracefully.
+
+| Service | File | Role |
+|---------|------|------|
+| `NIMClient` | `services/llm_client.py` | Sole LLM interface — raw `httpx` against NVIDIA NIM's OpenAI-compatible endpoint. Retry: 429 → exponential backoff, 5xx → 1 retry, timeout → 1 retry |
+| `NIMEmbeddingService` | `services/embedding_service.py` | 1024-dimensional embeddings from `nvidia/nv-embedqa-e5-v5` |
+| `VectorService` | `services/vector_service.py` | ChromaDB (always) + optional Supabase pgvector. Vector IDs are deterministic `SHA256(project_id + file_path + chunk_index)` |
+| `KnowledgeGraph` | `services/knowledge_graph.py` | NetworkX `DiGraph` with node types: `file`, `function`, `decision`, `author`, `module`. Always rebuilt from scratch on index. Persisted to `.codeguardian/knowledge_graph.json` |
+| `DecisionService` | `services/decision_service.py` | Store and retrieve architectural decisions extracted from git history |
+| `DecisionExtractor` | `services/decision_extractor.py` | LLM parses the last 50 commits to extract structured decisions |
+| `GitService` | `services/git_service.py` | `git blame`, `git log`, `git diff` helpers; initialized per-project when an index job runs |
+| `ImpactEngine` | `services/impact_engine.py` | Traverses the knowledge graph to compute blast-radius reports |
+
+---
+
+## LangGraph Agents
+
+Two agents are built with LangGraph and live in `server/agents/`.
+
+### ReviewAgent (`agents/review_agent.py`)
+
+Linear pipeline: `parse_input → pattern_check → impact_analysis → security_scan → synthesize`
+
+- **pattern_check** — checks naming, error handling, and logging consistency vs similar functions in the codebase
+- **security_scan** — detects hardcoded secrets, SQL injection, path traversal, PII in logs
+- **impact_analysis** — uses `ImpactEngine` to attach blast-radius data to the report
+- **synthesize** — LLM combines all findings into a ranked `ReviewReport`
+
+### OnboardingAgent (`agents/onboarding_agent.py`)
+
+Linear pipeline: `parse_task → find_relevant_code → gather_context → generate_path`
+
+Converts a plain-text task description into an ordered, numbered learning path enriched with architectural decisions and expert contacts from the knowledge graph.
+
+---
+
+## Running Tests
 
 ```bash
-cd desktop-app
-npm run typecheck
-```
+# All tests
+pytest
 
-### Adding a New MCP Tool
+# Single file
+pytest tests/test_decision_service.py
 
-1. Add a new `@mcp.tool()` decorated function to `src/mcp_server.py`
-2. Add the corresponding IPC handler to `desktop-app/electron/main.ts`
-3. Expose it via `contextBridge` in `desktop-app/electron/preload.ts`
-4. Call it from a React component in `desktop-app/src/`
+# Filter by name
+pytest tests/ -k "test_embedding"
 
-### Feeding Runtime Stats
-
-Populate `runtime_stats.json` from your CI/CD pipeline to enable the runtime telemetry feature:
-
-```json
-{
-  "src/your_module.py": {
-    "error_rate": 0.5,
-    "avg_latency_ms": 120,
-    "p99_latency_ms": 350,
-    "request_count": 5000,
-    "last_error": null,
-    "last_error_time": null
-  }
-}
+# Async tests
+pytest --asyncio-mode=auto
 ```
 
 ---
 
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE) for details.

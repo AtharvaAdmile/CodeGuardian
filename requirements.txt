@@ -33,3 +33,13 @@ pytest-asyncio>=0.21.0
 # Advanced Analyzers
 radon>=6.0.0
 pyyaml>=6.0.0
+
+# Knowledge Graph
+networkx>=3.0
+
+# Agent Framework
+langgraph>=0.2.0
+
+# AST Parsing (impact engine)
+tree-sitter>=0.23.0
+tree-sitter-python>=0.23.0

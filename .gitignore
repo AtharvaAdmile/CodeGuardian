@@ -73,7 +73,17 @@ htmlcov/
 
 chroma_data1111/
 .kiro/
-"DevGuard Project Doc.pdf"
+
+# Node / Desktop App
+node_modules/
+desktop-app/dist-electron/
+desktop-app/.vite/
+desktop-app/release/
+release-builds/
+*.tsbuildinfo
+
+# CodeGuardian runtime data
+.codeguardian/
 
 # Files that might appear in the root of a volume
 .DocumentRevisions-V100

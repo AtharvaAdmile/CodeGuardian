@@ -546,7 +546,14 @@ class KnowledgeGraph:
         Creates parent directories if they don't exist.
         """
         path = Path(filepath)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        parent = path.parent
+        # Clear any path component that exists as a file instead of directory
+        for ancestor in reversed(parent.parents):
+            if ancestor.exists() and not ancestor.is_dir():
+                ancestor.unlink()
+        if parent.exists() and not parent.is_dir():
+            parent.unlink()
+        parent.mkdir(parents=True, exist_ok=True)
         data = nx.node_link_data(self._graph)
         path.write_text(json.dumps(data, default=str), encoding="utf-8")
         logger.info("Knowledge graph saved → %s", filepath)

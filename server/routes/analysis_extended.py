@@ -4,10 +4,10 @@ project-dependencies, documentation-gaps, testability, testing,
 test-generation, and generated-test execution.
 
 POST /api/analyze/compliance              → PII / secret scan
-POST /api/analyze/regulatory-compliance   → FDA / ISO / IEC audit
+POST /api/analyze/regulatory-compliance   → FDA / ISO / IEC audit (stub)
 POST /api/analyze/expert                  → code-owner lookup
 POST /api/analyze/history                 → git blame history
-POST /api/analyze/runtime                 → production telemetry
+POST /api/analyze/runtime                 → production telemetry (stub)
 POST /api/analyze/project-dependencies    → full dependency graph
 POST /api/analyze/documentation-gaps      → undocumented code
 POST /api/analyze/testability             → testable elements
@@ -18,11 +18,16 @@ POST /api/analyze/run-test                → execute generated test
 
 from __future__ import annotations
 
+import ast as stdlib_ast
+import asyncio
 import logging
 import os
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from server.models.route_schemas import (
     ComplianceRequest,
@@ -53,6 +58,9 @@ logger = logging.getLogger("codeguardian.routes.analysis_extended")
 
 router = APIRouter(prefix="/api/analyze", tags=["analysis-extended"])
 
+_VALID_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx"}
+_SKIP_DIRS = {"node_modules", "__pycache__", ".git", "venv", ".venv", "dist", "build", "chroma_data"}
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -75,6 +83,56 @@ def _resolve_file(project_path: str, file_path: str) -> Path:
     return fp
 
 
+# ── Compliance patterns ────────────────────────────────────────────────
+
+_COMPLIANCE_PATTERNS: list[tuple[re.Pattern, str, str]] = [
+    (
+        re.compile(
+            r'(?:api[_\-]?key|apikey|secret[_\-]?key|access[_\-]?token|'
+            r'auth[_\-]?token|private[_\-]?key)\s*=\s*["\'][\w\-\/\+\.]{10,}["\']',
+            re.IGNORECASE,
+        ),
+        "Hardcoded API key or secret detected",
+        "secret",
+    ),
+    (
+        re.compile(
+            r'(?:password|passwd|pwd)\s*=\s*["\'][^"\']{4,}["\']',
+            re.IGNORECASE,
+        ),
+        "Hardcoded password detected",
+        "secret",
+    ),
+    (
+        re.compile(r'(?i)bearer\s+[a-zA-Z0-9\-._~+\/]{20,}'),
+        "Hardcoded bearer token detected",
+        "secret",
+    ),
+    (
+        re.compile(
+            r'(?:log(?:ger)?\.(?:info|debug|warning|error|critical)|print)\s*'
+            r'\([^)]*(?:email|phone|ssn|social[_\s]security|credit[_\s]card)',
+            re.IGNORECASE,
+        ),
+        "PII exposure: sensitive field logged or printed",
+        "pii",
+    ),
+    (
+        re.compile(r'\beval\s*\(', re.IGNORECASE),
+        "Use of eval() is a code injection risk",
+        "dangerous_call",
+    ),
+    (
+        re.compile(
+            r'(?:execute|cursor\.execute|query)\s*\(\s*f["\']',
+            re.IGNORECASE,
+        ),
+        "SQL injection risk: f-string used in query",
+        "sql_injection",
+    ),
+]
+
+
 # ── Compliance ──────────────────────────────────────────────────────────
 
 
@@ -82,15 +140,30 @@ def _resolve_file(project_path: str, file_path: str) -> Path:
 async def check_compliance(body: ComplianceRequest) -> ComplianceResponse:
     """Scan a code snippet for PII exposure, hardcoded secrets, or dangerous calls."""
     try:
-        from src.analysis.compliance import ComplianceScanner
+        violations: list[dict] = []
+        lines = body.code_snippet.splitlines()
 
-        scanner = ComplianceScanner()
-        result = scanner.scan_code(body.code_snippet)
+        for pattern, message, category in _COMPLIANCE_PATTERNS:
+            for m in pattern.finditer(body.code_snippet):
+                line_num = body.code_snippet[: m.start()].count("\n") + 1
+                violations.append({
+                    "line": line_num,
+                    "message": message,
+                    "category": category,
+                    "matched_text": m.group(0)[:80],
+                })
+
+        passed = len(violations) == 0
+        summary = (
+            "No compliance issues found."
+            if passed
+            else f"Found {len(violations)} compliance violation(s)."
+        )
 
         return ComplianceResponse(
-            passed=result.get("passed", True),
-            violations=result.get("violations", []),
-            summary=result.get("summary", ""),
+            passed=passed,
+            violations=violations,
+            summary=summary,
         )
     except Exception as exc:
         logger.exception("Compliance scan failed")
@@ -101,22 +174,13 @@ async def check_compliance(body: ComplianceRequest) -> ComplianceResponse:
 async def check_regulatory_compliance(
     body: RegulatoryComplianceRequest,
 ) -> RegulatoryComplianceResponse:
-    """Evaluate code against FDA, ISO 13485, IEC 62304, HIPAA standards."""
-    try:
-        from src.analysis.regulatory_scanner import get_regulatory_scanner
-
-        scanner = get_regulatory_scanner()
-        result = scanner.scan_file(body.file_path, body.file_content)
-
-        return RegulatoryComplianceResponse(
-            passed=result.get("passed", False),
-            score=result.get("score", 0.0),
-            violations=result.get("violations", []),
-            summary=result.get("summary", ""),
-        )
-    except Exception as exc:
-        logger.exception("Regulatory compliance scan failed")
-        raise HTTPException(500, f"Regulatory scan failed: {exc}") from exc
+    """Evaluate code against regulatory standards. Not yet implemented."""
+    return RegulatoryComplianceResponse(
+        passed=False,
+        score=0.0,
+        violations=[],
+        summary="Regulatory compliance scanning is not yet implemented.",
+    )
 
 
 # ── Expert ──────────────────────────────────────────────────────────────
@@ -124,21 +188,38 @@ async def check_regulatory_compliance(
 
 @router.post("/expert", response_model=ExpertResponse)
 async def find_expert(body: ExpertRequest) -> ExpertResponse:
-    """Identify code owners for a file via recency-weighted git blame."""
+    """Identify code owners for a file via git blame expertise mapping."""
     pp = _validate_project(body.project_path)
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        from src.analysis.expertise import ExpertiseTracker
+        from server.services.git_service import GitService
 
-        tracker = ExpertiseTracker(str(pp))
-        result = tracker.find_owners(str(fp))
+        git_svc = GitService(str(pp))
+        rel_path = str(fp.relative_to(pp.resolve()))
+        expertise_map = await asyncio.to_thread(
+            git_svc.build_expertise_map, [rel_path]
+        )
+
+        entries = expertise_map.get(rel_path, [])
+        experts_out: list[dict] = []
+        for entry in entries:
+            experts_out.append({
+                "name": entry.author,
+                "email": entry.email,
+                "commit_count": entry.commit_count,
+                "last_active": entry.last_active.isoformat(),
+            })
+
+        primary = experts_out[0]["name"] if experts_out else None
+        backup = experts_out[1]["name"] if len(experts_out) > 1 else None
+        last_active = experts_out[0]["last_active"] if experts_out else None
 
         return ExpertResponse(
-            primary_expert=result.get("primary_expert"),
-            backup=result.get("backup"),
-            experts=result.get("experts", []),
-            last_active=result.get("last_active"),
+            primary_expert=primary,
+            backup=backup,
+            experts=experts_out,
+            last_active=last_active,
             file_path=str(fp),
         )
     except HTTPException:
@@ -153,27 +234,51 @@ async def find_expert(body: ExpertRequest) -> ExpertResponse:
 
 @router.post("/history", response_model=HistoryResponse)
 async def file_history(body: HistoryRequest) -> HistoryResponse:
-    """Retrieve git commit history for specific lines in a file."""
+    """Retrieve git commit history and blame for a file."""
     pp = _validate_project(body.project_path)
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        from src.analysis.git_context import GitContextAnalyzer
+        from server.services.git_service import GitService
 
-        analyzer = GitContextAnalyzer(str(pp))
-        result = analyzer.get_history(str(fp), body.line_start, body.line_end)
+        git_svc = GitService(str(pp))
+        rel_path = str(fp.relative_to(pp.resolve()))
 
-        churn = analyzer.get_churn(str(fp))
-        result["churn"] = {
-            "count": churn.get("churn_count", 0),
-            "risk_level": churn.get("risk_level", "unknown"),
+        # Get commit history
+        commits = await asyncio.to_thread(git_svc.get_file_history, rel_path, 20)
+        history_out: list[dict] = []
+        for c in commits:
+            history_out.append({
+                "sha": c.sha,
+                "author": c.author,
+                "email": c.email,
+                "message": c.message,
+                "date": c.date.isoformat(),
+            })
+
+        # Get blame data for churn analysis
+        blame_entries = await asyncio.to_thread(git_svc.get_file_blame, rel_path)
+        churn_data: dict = {
+            "count": len(commits),
+            "risk_level": (
+                "high" if len(commits) > 30
+                else "medium" if len(commits) > 10
+                else "low"
+            ),
         }
+
+        summary = (
+            f"File has {len(commits)} commits from "
+            f"{len({c.author for c in commits})} author(s)."
+            if commits
+            else "No commit history found."
+        )
 
         return HistoryResponse(
             file_path=str(fp),
-            history=result.get("history", []),
-            summary=result.get("summary", ""),
-            churn=result.get("churn", {}),
+            history=history_out,
+            summary=summary,
+            churn=churn_data,
         )
     except HTTPException:
         raise
@@ -187,24 +292,12 @@ async def file_history(body: HistoryRequest) -> HistoryResponse:
 
 @router.post("/runtime", response_model=RuntimeResponse)
 async def runtime_stats(body: RuntimeRequest) -> RuntimeResponse:
-    """Get production runtime statistics for a file."""
-    try:
-        from src.analysis.runtime import RuntimeLoader
-
-        loader = RuntimeLoader()
-        result = loader.get_stats(body.file_path)
-
-        return RuntimeResponse(
-            file_path=body.file_path,
-            available=result.get("available", False),
-            error_rate=result.get("error_rate"),
-            avg_latency_ms=result.get("avg_latency_ms"),
-            alert_level=result.get("alert_level", "none"),
-            last_error=result.get("last_error"),
-        )
-    except Exception as exc:
-        logger.exception("Runtime stats lookup failed")
-        raise HTTPException(500, f"Runtime stats failed: {exc}") from exc
+    """Get production runtime statistics. No runtime telemetry is available."""
+    return RuntimeResponse(
+        file_path=body.file_path,
+        available=False,
+        alert_level="none",
+    )
 
 
 # ── Project Dependencies ────────────────────────────────────────────────
@@ -218,74 +311,23 @@ async def project_dependencies(
     pp = _validate_project(body.project_path)
 
     try:
-        from src.documentation.dependency_analyzer import DependencyAnalyzer
-        from src.models.documentation_models import CodeElement
+        from server.services.impact_engine import build_dependency_graph
 
-        valid_extensions = {".py", ".js", ".ts", ".jsx", ".tsx"}
-        skip_dirs = {"node_modules", "__pycache__", ".git", "venv", "dist", "build", "chroma_data"}
+        graph = await asyncio.to_thread(build_dependency_graph, str(pp))
 
         nodes: list[dict] = []
+        for node_id in graph.nodes:
+            name = Path(node_id).name
+            ext = Path(node_id).suffix.lower().replace(".", "")
+            nodes.append({
+                "id": node_id,
+                "name": name,
+                "group": ext,
+            })
+
         links: list[dict] = []
-        node_ids: set[str] = set()
-
-        for root, dirs, files in os.walk(pp):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in skip_dirs]
-            for fname in files:
-                fp = Path(root) / fname
-                if fp.suffix.lower() not in valid_extensions:
-                    continue
-                rel_path = str(fp.relative_to(pp))
-                nodes.append({
-                    "id": rel_path,
-                    "name": fname,
-                    "group": fp.suffix.lower().replace(".", ""),
-                })
-                node_ids.add(rel_path)
-
-        analyzer = DependencyAnalyzer()
-        seen_links: set[str] = set()
-
-        for node in nodes:
-            file_path = pp / node["id"]
-            try:
-                content = file_path.read_text(encoding="utf-8")
-                language = {
-                    ".py": "python", ".js": "javascript", ".ts": "typescript",
-                    ".jsx": "javascript", ".tsx": "typescript",
-                }.get(file_path.suffix.lower(), "unknown")
-
-                element = CodeElement(
-                    element_id=node["id"],
-                    element_type="file",
-                    name=node["name"],
-                    file_path=str(file_path),
-                    start_line=1,
-                    end_line=100,
-                    language=language,
-                    code_content=content,
-                    existing_doc=None,
-                )
-
-                deps = analyzer.analyze_dependencies(element, [])
-                for dep in deps:
-                    if dep.dependency_type == "import":
-                        for pot in nodes:
-                            pot_name = pot["name"].split(".")[0]
-                            if (
-                                dep.name == pot_name
-                                or dep.name.replace(".", "/") in pot["id"]
-                            ):
-                                if node["id"] != pot["id"]:
-                                    key = f"{node['id']}:{pot['id']}"
-                                    if key not in seen_links:
-                                        seen_links.add(key)
-                                        links.append({
-                                            "source": node["id"],
-                                            "target": pot["id"],
-                                        })
-                                break
-            except Exception as e:
-                logger.warning("Skip file %s: %s", file_path, e)
+        for src, dst in graph.edges:
+            links.append({"source": src, "target": dst})
 
         return ProjectDependenciesResponse(
             nodes=nodes,
@@ -310,79 +352,93 @@ async def documentation_gaps(body: DocumentationGapsRequest) -> DocumentationGap
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        from src.code_parser import CodeParser
-        from src.documentation.gap_detector import GapDetector
-        from src.models.documentation_models import CodeElement
-
         content = fp.read_text(encoding="utf-8")
-        parser = CodeParser()
-        parsed = parser.parse_file(str(fp), content)
-
         ext = fp.suffix.lower()
-        language = {".py": "python", ".js": "javascript", ".ts": "typescript"}.get(ext, "unknown")
-
-        gap_detector = GapDetector(quality_threshold=70.0)
         elements: list[dict] = []
         gaps: list[dict] = []
-        total_score = 0.0
 
-        for func in parsed.functions:
-            element = CodeElement(
-                element_id=f"{fp}:{func.name}:{func.start_line}",
-                element_type="function",
-                name=func.name,
-                file_path=str(fp),
-                start_line=func.start_line,
-                end_line=func.end_line,
-                language=language,
-                code_content=func.content,
-                existing_doc=func.docstring,
+        if ext == ".py":
+            # Use stdlib ast to find functions/classes and check docstrings
+            try:
+                tree = stdlib_ast.parse(content)
+            except SyntaxError:
+                return DocumentationGapsResponse(
+                    file_path=str(fp),
+                    error="Could not parse Python file (syntax error).",
+                )
+
+            for node in stdlib_ast.walk(tree):
+                if isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+                    docstring = stdlib_ast.get_docstring(node)
+                    has_doc = bool(docstring)
+                    # Quality: 100 if docstring exists & > 20 chars, else 0
+                    quality = 100.0 if has_doc and len(docstring) > 20 else (50.0 if has_doc else 0.0)
+                    info = {
+                        "name": node.name,
+                        "type": "function",
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                        "quality_score": quality,
+                        "has_gap": quality < 70.0,
+                        "has_docstring": has_doc,
+                    }
+                    elements.append(info)
+                    if info["has_gap"]:
+                        gaps.append(info)
+
+                elif isinstance(node, stdlib_ast.ClassDef):
+                    docstring = stdlib_ast.get_docstring(node)
+                    has_doc = bool(docstring)
+                    quality = 100.0 if has_doc and len(docstring) > 20 else (50.0 if has_doc else 0.0)
+                    info = {
+                        "name": node.name,
+                        "type": "class",
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                        "quality_score": quality,
+                        "has_gap": quality < 70.0,
+                        "has_docstring": has_doc,
+                    }
+                    elements.append(info)
+                    if info["has_gap"]:
+                        gaps.append(info)
+
+        elif ext in {".js", ".ts", ".jsx", ".tsx"}:
+            # Regex-based: find function/class declarations and check for JSDoc
+            func_re = re.compile(
+                r"(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)|"
+                r"(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\s*\(|"
+                r"(?:export\s+)?(?:default\s+)?class\s+(\w+)",
+                re.MULTILINE,
             )
-            score = gap_detector.calculate_quality_score(element)
-            has_gap = gap_detector.has_documentation_gap(score)
-            info = {
-                "name": func.name,
-                "type": "function",
-                "start_line": func.start_line,
-                "end_line": func.end_line,
-                "quality_score": score,
-                "has_gap": has_gap,
-                "has_docstring": bool(func.docstring),
-            }
-            elements.append(info)
-            total_score += score
-            if has_gap:
-                gaps.append(info)
+            lines = content.splitlines()
+            for m in func_re.finditer(content):
+                name = m.group(1) or m.group(2) or m.group(3)
+                line_num = content[: m.start()].count("\n") + 1
+                # Check for JSDoc comment above
+                has_doc = False
+                if line_num > 1:
+                    prev_line = lines[line_num - 2].strip() if line_num - 1 < len(lines) else ""
+                    has_doc = prev_line.endswith("*/")
+                quality = 100.0 if has_doc else 0.0
+                info = {
+                    "name": name,
+                    "type": "function",
+                    "start_line": line_num,
+                    "end_line": min(line_num + 20, len(lines)),
+                    "quality_score": quality,
+                    "has_gap": quality < 70.0,
+                    "has_docstring": has_doc,
+                }
+                elements.append(info)
+                if info["has_gap"]:
+                    gaps.append(info)
 
-        for cls in parsed.classes:
-            element = CodeElement(
-                element_id=f"{fp}:{cls.name}:{cls.start_line}",
-                element_type="class",
-                name=cls.name,
-                file_path=str(fp),
-                start_line=cls.start_line,
-                end_line=cls.end_line,
-                language=language,
-                code_content=cls.content,
-                existing_doc=cls.docstring,
-            )
-            score = gap_detector.calculate_quality_score(element)
-            has_gap = gap_detector.has_documentation_gap(score)
-            info = {
-                "name": cls.name,
-                "type": "class",
-                "start_line": cls.start_line,
-                "end_line": cls.end_line,
-                "quality_score": score,
-                "has_gap": has_gap,
-                "has_docstring": bool(cls.docstring),
-            }
-            elements.append(info)
-            total_score += score
-            if has_gap:
-                gaps.append(info)
-
-        avg_score = total_score / len(elements) if elements else 100.0
+        avg_score = (
+            sum(e["quality_score"] for e in elements) / len(elements)
+            if elements
+            else 100.0
+        )
 
         return DocumentationGapsResponse(
             file_path=str(fp),
@@ -409,24 +465,64 @@ async def analyze_testability(body: TestabilityRequest) -> TestabilityResponse:
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        from src.testing.test_analyzer import TestAnalyzer
-
         content = fp.read_text(encoding="utf-8")
-        analyzer = TestAnalyzer()
-        testable = analyzer.analyze_file(str(fp), content)
+        elements_out: list[dict] = []
 
-        elements_out = []
-        for el in testable:
-            elements_out.append({
-                "element_id": el.element_id,
-                "name": el.name,
-                "element_type": el.element_type,
-                "file_path": el.file_path,
-                "start_line": el.start_line,
-                "end_line": el.end_line,
-                "content": el.content,
-                "complexity_score": el.complexity_score,
-            })
+        if fp.suffix.lower() == ".py":
+            try:
+                tree = stdlib_ast.parse(content)
+            except SyntaxError:
+                return TestabilityResponse(file_path=str(fp), error="Syntax error in file.")
+
+            lines = content.splitlines()
+
+            # Get complexity per function via radon if available
+            complexity_map: dict[str, int] = {}
+            try:
+                import radon.complexity as radon_cc
+                blocks = radon_cc.cc_visit(content)
+                for b in blocks:
+                    complexity_map[b.name] = b.complexity
+            except Exception:
+                pass
+
+            for node in stdlib_ast.walk(tree):
+                if isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+                    end_line = getattr(node, "end_lineno", node.lineno + 10)
+                    func_content = "\n".join(lines[node.lineno - 1 : end_line])
+                    elements_out.append({
+                        "element_id": f"{fp}:{node.name}:{node.lineno}",
+                        "name": node.name,
+                        "element_type": "function",
+                        "file_path": str(fp),
+                        "start_line": node.lineno,
+                        "end_line": end_line,
+                        "content": func_content[:500],
+                        "complexity_score": complexity_map.get(node.name, 1),
+                    })
+        else:
+            # JS/TS — regex extraction
+            func_re = re.compile(
+                r"(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)|"
+                r"(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\s*\(",
+                re.MULTILINE,
+            )
+            lines = content.splitlines()
+            for m in func_re.finditer(content):
+                name = m.group(1) or m.group(2)
+                line_num = content[: m.start()].count("\n") + 1
+                end_line = min(line_num + 30, len(lines))
+                func_content = "\n".join(lines[line_num - 1 : end_line])
+                elements_out.append({
+                    "element_id": f"{fp}:{name}:{line_num}",
+                    "name": name,
+                    "element_type": "function",
+                    "file_path": str(fp),
+                    "start_line": line_num,
+                    "end_line": end_line,
+                    "content": func_content[:500],
+                    "complexity_score": 1,
+                })
 
         return TestabilityResponse(
             file_path=str(fp),
@@ -449,38 +545,40 @@ async def run_tests(body: RunTestsRequest) -> RunTestsResponse:
     pp = _validate_project(body.project_path)
 
     try:
-        from src.testing.test_runner import TestRunner
-
-        runner = TestRunner()
-
         if body.file_path:
             fp = _resolve_file(body.project_path, body.file_path)
-            result = runner.run_file(str(fp))
-            return RunTestsResponse(
-                passed=result.passed,
-                output=result.output or "",
-                results={
-                    str(fp): {
-                        "passed": result.passed,
-                        "output": result.output,
-                    }
-                },
-            )
+            target = str(fp)
         else:
-            test_path = pp / body.test_dir
-            results = runner.run_all(str(test_path))
-            all_passed = all(r.passed for r in results.values()) if results else True
-            return RunTestsResponse(
-                passed=all_passed,
-                results={
-                    p: {
-                        "passed": r.passed,
-                        "output": (r.output or "")[:500],
-                        "error": r.error_message,
-                    }
-                    for p, r in results.items()
-                },
-            )
+            target = str(pp / body.test_dir)
+
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python", "-m", "pytest", target, "-v", "--tb=short", "--no-header"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(pp),
+        )
+
+        passed = result.returncode == 0
+        output = (result.stdout + "\n" + result.stderr).strip()
+
+        return RunTestsResponse(
+            passed=passed,
+            output=output[:5000],
+            results={
+                target: {
+                    "passed": passed,
+                    "output": output[:2000],
+                }
+            },
+        )
+    except subprocess.TimeoutExpired:
+        return RunTestsResponse(
+            passed=False,
+            output="Test execution timed out after 120 seconds.",
+            error="timeout",
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -492,20 +590,67 @@ async def run_tests(body: RunTestsRequest) -> RunTestsResponse:
 
 
 @router.post("/generate-test", response_model=GenerateTestResponse)
-async def generate_test(body: GenerateTestRequest) -> GenerateTestResponse:
+async def generate_test(body: GenerateTestRequest, request: Request) -> GenerateTestResponse:
     """Generate a unit test for a source file using AI."""
     try:
-        from src.testing.test_generator import TestGenerator
+        llm_client = getattr(request.app.state, "llm_client", None)
+        if llm_client is None:
+            return GenerateTestResponse(
+                success=False,
+                error="LLM client is not initialised. Cannot generate tests.",
+            )
 
-        generator = TestGenerator()
-        result = generator.generate_test(body.file_path, body.file_content)
+        ext = Path(body.file_path).suffix.lower()
+        language = {
+            ".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".jsx": "javascript", ".tsx": "typescript",
+        }.get(ext, "unknown")
+
+        framework = "pytest" if language == "python" else "jest"
+
+        # Truncate content to avoid token limits
+        content_truncated = body.file_content[:4000]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are a test-generation assistant. Write a comprehensive "
+                    f"unit test file using {framework} for the provided source code. "
+                    f"Language: {language}. Output ONLY the test code — no prose."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"File: {body.file_path}\n\n```\n{content_truncated}\n```",
+            },
+        ]
+
+        response = await llm_client.complete(messages=messages, stream=False)
+        test_code = response.content.strip()
+
+        # Strip markdown code fences if present
+        if test_code.startswith("```"):
+            lines = test_code.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            test_code = "\n".join(lines)
+
+        # Suggest test path
+        src_path = Path(body.file_path)
+        if language == "python":
+            suggested = f"tests/test_{src_path.stem}.py"
+        else:
+            suggested = f"__tests__/{src_path.stem}.test{ext}"
 
         return GenerateTestResponse(
-            test_code=result.get("test_code"),
-            language=result.get("language", "unknown"),
-            framework=result.get("framework", ""),
-            suggested_test_path=result.get("suggested_test_path", ""),
-            success=result.get("success", False),
+            test_code=test_code,
+            language=language,
+            framework=framework,
+            suggested_test_path=suggested,
+            success=True,
         )
     except Exception as exc:
         logger.exception("Test generation failed")
@@ -519,18 +664,39 @@ async def generate_test(body: GenerateTestRequest) -> GenerateTestResponse:
 async def run_generated_test(body: RunGeneratedTestRequest) -> RunGeneratedTestResponse:
     """Execute a previously generated test file."""
     pp = _validate_project(body.project_path)
+    test_fp = Path(body.test_file_path)
+    if not test_fp.is_absolute():
+        test_fp = pp / test_fp
+
+    if not test_fp.exists():
+        return RunGeneratedTestResponse(
+            passed=False,
+            file_path=str(test_fp),
+            error_message=f"Test file not found: {test_fp}",
+        )
 
     try:
-        from src.testing.test_runner import TestRunner
-
-        runner = TestRunner(project_root=str(pp))
-        result = runner.run_generated_test(body.test_file_path)
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python", "-m", "pytest", str(test_fp), "-v", "--tb=short"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(pp),
+        )
 
         return RunGeneratedTestResponse(
-            passed=result.passed,
-            file_path=result.file_path or "",
-            output=result.output or "",
-            error_message=result.error_message,
+            passed=result.returncode == 0,
+            file_path=str(test_fp),
+            output=(result.stdout + "\n" + result.stderr).strip()[:5000],
+            error_message=None if result.returncode == 0 else "Tests failed.",
+        )
+    except subprocess.TimeoutExpired:
+        return RunGeneratedTestResponse(
+            passed=False,
+            file_path=str(test_fp),
+            output="Test execution timed out after 120 seconds.",
+            error_message="timeout",
         )
     except Exception as exc:
         logger.exception("Generated test execution failed")

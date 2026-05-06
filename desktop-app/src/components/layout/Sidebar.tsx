@@ -66,7 +66,7 @@ export function Sidebar({ healthStatus }: SidebarProps) {
                 ${
                   isActive
                     ? "bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue"
-                    : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                    : "text-text-secondary hover:bg-bg-hover hover:text-text-primary border-l-2 border-transparent"
                 }
               `}
               title={!isExpanded ? item.label : undefined}

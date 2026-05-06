@@ -15,8 +15,8 @@ class ComponentStatus(BaseModel):
 
     status: str = Field(
         ...,
-        description="One of: ok, not_initialized, degraded, error",
-        examples=["ok", "not_initialized"],
+        description="One of: ok, not_initialized, warming_up, degraded, error",
+        examples=["ok", "not_initialized", "warming_up"],
     )
     detail: str | None = Field(
         default=None,

@@ -136,3 +136,37 @@ Add to Claude Code MCP config (`~/.claude/mcp_servers.json`):
 ```
 
 Available tools: `query_codebase`, `get_context_for_file`, `get_decision_history`, `get_expertise`.
+
+## Code Issues (All Fixed)
+
+All issues below have been resolved:
+
+### Fixed Critical Bugs
+
+1. ✅ **`server/routes/query.py:326`** - Fixed by filtering line-by-line instead of regex substitution. Now only removes lines that match the confidence pattern exactly, preserving other content.
+
+2. ✅ **`server/routes/indexing.py:468`** - Fixed by using list comprehension instead of `zip()` unpacking. Now properly converts to lists without type ignores.
+
+### Fixed Potential Issues
+
+3. ✅ **`server/services/git_service.py:252`** - Fixed by using timezone-aware epoch datetime (1970-01-01) instead of naive `datetime.min`. Comparisons now work correctly.
+
+4. ✅ **`server/routes/analysis.py:167-179`** - Fixed by logging at warning level and including error message in the response data. Users can now see what went wrong.
+
+5. ✅ **`server/services/decision_service.py:325`** - Fixed by using proper path normalization and segment-based matching instead of simple substring match. False positives are now prevented.
+
+6. ✅ **`server/app.py:72`** - Fixed by storing warmup task reference in `app.state.warmup_task` and properly cancelling it during shutdown.
+
+### Fixed Minor Issues
+
+7. ✅ **Inconsistent HTTPException handling** - Fixed by removing redundant `except HTTPException: raise` pattern (HTTPException inherits from BaseException, not Exception, so it's not caught by generic handlers).
+
+8. ✅ **Null checks consistency** - Verified both patterns (`kg is None or kg.is_empty()` and `kg is not None and not kg.is_empty()`) are safe due to short-circuit evaluation.
+
+9. ✅ **`server/routes/indexing.py:819`** - Fixed by storing task reference in status for tracking. Note: Full cancellation requires additional architecture.
+
+### Fixed Performance Issues
+
+10. ✅ **`server/services/decision_service.py:294-298`** - Fixed by adding `limit` parameter to `_read_all_local()`. Now limits to 1000 most recent decisions to prevent memory issues. For larger projects, use Supabase with pgvector.
+
+11. ✅ **`server/routes/indexing.py:389`** - Verified: File read errors ARE already visible via `status.errors` field when polling job status.

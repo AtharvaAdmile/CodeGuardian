@@ -845,7 +845,7 @@ class ReviewAgent:
             "error": None,
         }
         result = await asyncio.wait_for(
-            self._app.ainvoke(initial_state), timeout=90.0
+            self._app.ainvoke(initial_state), timeout=180.0
         )
         out = result.get("final_review", {})
         out["impact_report"] = result.get("impact_report", {})

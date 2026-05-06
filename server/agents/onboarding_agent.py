@@ -458,6 +458,6 @@ class OnboardingAgent:
             "error": None,
         }
         result = await asyncio.wait_for(
-            self._app.ainvoke(initial_state), timeout=60.0
+            self._app.ainvoke(initial_state), timeout=180.0
         )
         return result.get("learning_path", [])

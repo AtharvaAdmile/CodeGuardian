@@ -252,6 +252,12 @@ class DecisionService:
     def _project_dir(self, project_id: str) -> Path:
         """Return (and create) the local decisions directory for a project."""
         path = Path(self._local_dir) / project_id
+        # Clear any path component that exists as a file instead of directory
+        for ancestor in reversed(path.parents):
+            if ancestor.exists() and not ancestor.is_dir():
+                ancestor.unlink()
+        if path.exists() and not path.is_dir():
+            path.unlink()
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -263,13 +269,21 @@ class DecisionService:
         path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         logger.debug("Stored decision '%s' locally at %s", data.get("title"), path)
 
-    def _read_all_local(self, project_id: str) -> list[dict]:
-        """Read all local decision JSON files for a project."""
+    def _read_all_local(self, project_id: str, limit: int | None = None) -> list[dict]:
+        """Read local decision JSON files for a project, optionally limited to most recent."""
         project_path = Path(self._local_dir) / project_id
         if not project_path.exists():
             return []
+
+        # Get all JSON files, sorted by modification time (newest first)
+        files = sorted(project_path.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+
+        # Apply limit if specified
+        if limit is not None:
+            files = files[:limit]
+
         decisions: list[dict] = []
-        for fp in project_path.glob("*.json"):
+        for fp in files:
             try:
                 decisions.append(json.loads(fp.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError) as exc:
@@ -283,7 +297,9 @@ class DecisionService:
         top_k: int,
     ) -> list[DecisionRecord]:
         """Brute-force cosine similarity search over local JSON decisions."""
-        decisions = self._read_all_local(project_id)
+        # Limit to most recent 1000 decisions to prevent memory issues
+        # For larger projects, consider using Supabase with pgvector
+        decisions = self._read_all_local(project_id, limit=1000)
         scored: list[tuple[float, dict]] = []
         for d in decisions:
             emb = d.get("embedding")
@@ -312,11 +328,29 @@ class DecisionService:
         file_path: str,
     ) -> list[DecisionRecord]:
         """Scan local JSON files for decisions whose source_ref matches."""
+        from pathlib import Path as FilePath
+
         decisions = self._read_all_local(project_id)
         results: list[DecisionRecord] = []
+
+        # Normalize the search path for comparison
+        search_path = FilePath(file_path).as_posix()
+
         for d in decisions:
             ref = d.get("source_ref", "") or ""
-            if file_path in ref:
+            if not ref:
+                continue
+
+            # Normalize the reference path
+            ref_path = FilePath(ref).as_posix()
+
+            # Check for exact match or proper path prefix (handles line numbers in ref)
+            # Match if: exact match, ref starts with search_path + "/", or search_path in ref as complete segment
+            if (ref_path == search_path or
+                ref_path.startswith(search_path + ":") or
+                ref_path.startswith(search_path + "#") or
+                ref_path.startswith(search_path + "/") or
+                search_path in ref_path.split("/")):
                 results.append(
                     DecisionRecord(
                         id=d.get("id"),

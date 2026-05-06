@@ -32,9 +32,9 @@ _THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 # ── Retry constants ──────────────────────────────────────────────────────
 _MAX_RATE_LIMIT_RETRIES = 3
-_RATE_LIMIT_BASE_DELAY = 1.0  # seconds
-_SERVER_ERROR_DELAY = 2.0     # seconds
-_EXTENDED_TIMEOUT = 90.0      # seconds for timeout retry
+_RATE_LIMIT_BASE_DELAY = 0.5  # seconds - reduced for faster retries
+_SERVER_ERROR_DELAY = 1.0      # seconds - reduced for faster retries
+_EXTENDED_TIMEOUT = 120.0      # seconds - increased to avoid retries
 
 
 class NIMClientError(Exception):
@@ -66,7 +66,7 @@ class NIMClient:
         base_url: str,
         api_key: str,
         model: str = "qwen/qwen3-coder-480b-a35b-instruct",
-        timeout: float = 60.0,
+        timeout: float = 120.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key

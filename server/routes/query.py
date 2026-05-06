@@ -290,6 +290,7 @@ def _build_messages(
     question: str,
     conversation_history: list[dict[str, str]],
 ) -> list[dict[str, str]]:
+    """Build LLM messages with system prompt and conversation history."""
     system_content = _SYSTEM_PROMPT.format(
         code_context=code_context,
         decisions_context=decisions_context,
@@ -323,8 +324,11 @@ def _parse_llm_response(
         except ValueError:
             pass
 
-    # Remove the "Confidence: X.XX" line from the displayed answer
-    answer = _CONFIDENCE_RE.sub("", raw).strip()
+    # Remove only the "Confidence: X.XX" line(s) from the displayed answer
+    # Split into lines, filter out confidence lines, rejoin
+    lines = raw.split('\n')
+    filtered_lines = [line for line in lines if not _CONFIDENCE_RE.match(line.strip())]
+    answer = '\n'.join(filtered_lines).strip()
 
     # Collect any cited file:line references not already in vector sources
     existing_paths = {s.file_path for s in vector_sources}
@@ -344,6 +348,7 @@ def _to_decision_refs(
     kg_decisions: list[dict],
     semantic_decisions: list[dict],
 ) -> list[DecisionRef]:
+    """Convert decision dicts to DecisionRef objects."""
     return [
         DecisionRef(
             title=d.get("title", ""),
@@ -415,8 +420,6 @@ async def ask(body: AskRequest, request: Request) -> AskResponse:
             experts=experts,
         )
 
-    except HTTPException:
-        raise
     except Exception as exc:
         logger.exception("Error in /api/ask")
         raise HTTPException(500, f"Query failed: {exc}") from exc
@@ -443,6 +446,7 @@ async def ask_stream(body: AskRequest, request: Request) -> StreamingResponse:
     )
 
     async def _event_generator() -> AsyncGenerator[str, None]:
+        """SSE event generator for streaming response."""
         try:
             # 1 & 2: Embed + vector search
             sources, file_paths, code_context, query_embedding, _ = (

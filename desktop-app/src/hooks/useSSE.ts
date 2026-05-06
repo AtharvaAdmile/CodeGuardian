@@ -13,7 +13,7 @@ interface SSEState {
 }
 
 interface UseSSEReturn extends SSEState {
-  sendQuestion: (projectId: string, question: string) => void;
+  sendQuestion: (projectId: string, question: string) => Promise<void>;
   reset: () => void;
 }
 

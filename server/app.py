@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI):
     from server.services.llm_client import NIMClient
 
     llm_client: NIMClient | None = None
+    warmup_task: asyncio.Task | None = None
 
     if settings.nvidia_nim_api_key:
         llm_client = NIMClient(
@@ -69,10 +70,13 @@ async def lifespan(app: FastAPI):
             model=settings.nvidia_llm_model,
         )
         # Non-blocking warm-up — don't delay server startup
-        asyncio.create_task(_warmup_llm(llm_client))
+        # Store task reference to ensure proper cleanup on shutdown
+        warmup_task = asyncio.create_task(_warmup_llm(llm_client))
         logger.info("✅ NIM LLM client initialised (model: %s)", settings.nvidia_llm_model)
     else:
         logger.warning("⚠️  NVIDIA_NIM_API_KEY not set — LLM client disabled")
+
+    app.state.warmup_task = warmup_task
 
     app.state.llm_client = llm_client
 
@@ -169,6 +173,16 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ────────────────────────────────────────────────────
     logger.info("🛑 CodeGuardian server shutting down …")
+
+    # Cancel warmup task if still running
+    warmup_task = getattr(app.state, "warmup_task", None)
+    if warmup_task is not None and not warmup_task.done():
+        warmup_task.cancel()
+        try:
+            await asyncio.wait_for(warmup_task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        logger.info("   Warmup task cancelled")
 
     # Close LLM client
     if app.state.llm_client is not None:

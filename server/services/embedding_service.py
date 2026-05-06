@@ -164,6 +164,7 @@ class NIMEmbeddingService:
             "model": self._model,
             "input": texts,
             "input_type": input_type,
+            "truncate": "END",      # Let the API truncate gracefully instead of 400-ing
         }
 
         start = time.monotonic()

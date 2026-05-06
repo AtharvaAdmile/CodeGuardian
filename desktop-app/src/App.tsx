@@ -52,7 +52,7 @@ function LoadingPage() {
 
 function LandingPage({ onSelectProject }: { onSelectProject: () => void }) {
   return (
-    <div className="flex-1 flex items-center justify-center bg-bg-primary">
+    <div className="h-screen flex items-center justify-center bg-bg-primary">
       <div className="text-center">
         <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-accent-blue to-text-secondary bg-clip-text text-transparent">
           CodeGuardian

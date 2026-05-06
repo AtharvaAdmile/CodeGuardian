@@ -74,13 +74,15 @@ export default function Dashboard() {
   const expertsCount = indexStatus?.expertise_files_mapped || 0;
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
+    <div className="flex flex-col h-full">
+      <div className="p-6 border-b border-border">
         <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
-        <p className="text-text-secondary">
+        <p className="text-text-secondary mt-1">
           {projectName} — {isIndexing ? "Indexing in progress..." : "Ready"}
         </p>
       </div>
+      <div className="flex-1 overflow-y-auto p-6">
+      <div className="space-y-6">
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
@@ -164,6 +166,8 @@ export default function Dashboard() {
             View full knowledge graph →
           </button>
         </div>
+      </div>
+      </div>
       </div>
     </div>
   );

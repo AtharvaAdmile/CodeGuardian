@@ -29,6 +29,12 @@ CodeGuardian operates as an MCP (Model Context Protocol) server that exposes cod
 | Structure Analysis | ✅ Built | Project organization scoring |
 
 ## Implementation Log
+### 2026-05-06 - Bug Fixes
+- Fixed 11 code issues across the codebase
+- Critical: query.py regex substitution, indexing.py type safety, git_service.py timezone
+- Memory: decision_service.py now limits local search to 1000 decisions
+- Added warmup task tracking for proper server shutdown
+
 ### 2026-03-12 - Project Management Setup
 - Created `Memory.md` and `Skills.md` for project tracking
 - Key decisions: Established living documentation workflow

@@ -237,9 +237,9 @@ class GitService:
             if not blame_entries:
                 continue
 
-            # Aggregate per-author stats
+            # Aggregate per-author stats - use epoch as initial value to ensure timezone-aware comparison
             author_stats: dict[str, dict] = defaultdict(
-                lambda: {"email": "", "commit_count": 0, "last_active": datetime.min.replace(tzinfo=timezone.utc)}
+                lambda: {"email": "", "commit_count": 0, "last_active": datetime(1970, 1, 1, tzinfo=timezone.utc)}
             )
 
             # Track unique commits per author (blame can repeat SHAs)
@@ -312,6 +312,12 @@ class GitService:
     ) -> None:
         """Write expertise map to local JSON file."""
         out_dir = Path(self._local_dir)
+        # Clear any path component that exists as a file instead of directory
+        for ancestor in reversed(out_dir.parents):
+            if ancestor.exists() and not ancestor.is_dir():
+                ancestor.unlink()
+        if out_dir.exists() and not out_dir.is_dir():
+            out_dir.unlink()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         data = {}

@@ -77,7 +77,7 @@ async def review_code(body: ReviewRequest, request: Request) -> ReviewResponse:
 
     except asyncio.TimeoutError:
         logger.warning("Review agent timed out for project %r", body.project_id)
-        raise HTTPException(504, "Review agent timed out after 90 seconds.")
+        raise HTTPException(504, "Review agent timed out after 180 seconds.")
     except HTTPException:
         raise
     except Exception as exc:

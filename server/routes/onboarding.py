@@ -61,7 +61,7 @@ async def generate_onboarding_path(
 
     except asyncio.TimeoutError:
         logger.warning("Onboarding agent timed out for project %r", body.project_id)
-        raise HTTPException(504, "Onboarding agent timed out after 60 seconds.")
+        raise HTTPException(504, "Onboarding agent timed out after 180 seconds.")
     except HTTPException:
         raise
     except Exception as exc:

@@ -8,7 +8,9 @@ POST /api/analyze/dependencies   → import / call-graph analysis
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -25,6 +27,10 @@ from server.models.route_schemas import (
 logger = logging.getLogger("codeguardian.routes.analysis")
 
 router = APIRouter(prefix="/api/analyze", tags=["analysis"])
+
+# Indexed file extensions (same as CLAUDE.md)
+_VALID_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx"}
+_SKIP_DIRS = {"node_modules", "__pycache__", ".git", "venv", ".venv", "dist", "build", "chroma_data"}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -60,25 +66,56 @@ async def analyze_structure(body: StructureRequest) -> StructureResponse:
     """
     Walk the project directory, count files by type, check for git, and
     return an organisation score (0-10).
-
-    Uses ``src.structure_analyzer.StructureAnalyzer``.
     """
     pp = _validate_project(body.project_path)
 
     try:
-        from src.structure_analyzer import StructureAnalyzer
+        total_files = 0
+        root_files = 0
+        folders: set[str] = set()
+        has_git = (pp / ".git").is_dir()
 
-        analyzer = StructureAnalyzer(str(pp))
-        result = analyzer.analyze_structure()
+        for dirpath, dirnames, filenames in os.walk(pp):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+            rel = os.path.relpath(dirpath, pp)
+            if rel != ".":
+                folders.add(rel)
+            for fname in filenames:
+                ext = Path(fname).suffix.lower()
+                if ext in _VALID_EXTENSIONS:
+                    total_files += 1
+                    if rel == ".":
+                        root_files += 1
+
+        folders_count = len(folders)
+
+        # Simple organisation score heuristic (0-10):
+        # Penalise if too many files are in root (should be in subdirs).
+        # Reward having git, having subdirectories, and having a reasonable structure.
+        score = 5.0
+        if has_git:
+            score += 1.5
+        if folders_count >= 3:
+            score += 1.5
+        elif folders_count >= 1:
+            score += 0.5
+        if total_files > 0:
+            root_ratio = root_files / total_files
+            if root_ratio < 0.3:
+                score += 2.0  # well organised
+            elif root_ratio < 0.6:
+                score += 1.0
+            else:
+                score -= 1.0  # too flat
+        score = max(0.0, min(10.0, score))
 
         return StructureResponse(
             project_path=str(pp),
-            score=result.get("score", 0.0),
-            has_git=result.get("has_git", False),
-            total_files=result.get("total_files", 0),
-            root_files=result.get("root_files", 0),
-            folders_count=result.get("folders_count", 0),
-            error=result.get("error"),
+            score=round(score, 1),
+            has_git=has_git,
+            total_files=total_files,
+            root_files=root_files,
+            folders_count=folders_count,
         )
 
     except HTTPException:
@@ -93,26 +130,89 @@ async def analyze_health(body: HealthRequest) -> HealthResponse:
     """
     Compute file-level health score combining radon cyclomatic complexity
     and git churn.
-
-    Uses ``src.structure_analyzer.StructureAnalyzer.get_file_health()``.
     """
     _validate_project(body.project_path)
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        from src.structure_analyzer import StructureAnalyzer
+        content = fp.read_text(encoding="utf-8")
+        complexity_data: dict = {}
+        churn_data: dict = {}
 
-        analyzer = StructureAnalyzer(body.project_path)
-        result = analyzer.get_file_health(str(fp))
+        # ── Cyclomatic complexity via radon ──────────────────────────
+        if fp.suffix.lower() == ".py":
+            try:
+                import radon.complexity as radon_cc
+
+                blocks = radon_cc.cc_visit(content)
+                if blocks:
+                    avg_cc = sum(b.complexity for b in blocks) / len(blocks)
+                    max_cc = max(b.complexity for b in blocks)
+                    complexity_data = {
+                        "average": round(avg_cc, 2),
+                        "max": max_cc,
+                        "functions_analyzed": len(blocks),
+                        "details": [
+                            {"name": b.name, "complexity": b.complexity, "rank": b.letter}
+                            for b in sorted(blocks, key=lambda x: -x.complexity)[:10]
+                        ],
+                    }
+            except Exception as exc:
+                logger.debug("Radon complexity failed: %s", exc)
+
+        # ── Git churn ────────────────────────────────────────────────
+        churn_error: str | None = None
+        try:
+            from server.services.git_service import GitService
+
+            git_svc = GitService(body.project_path)
+            rel_path = str(fp.relative_to(Path(body.project_path).resolve()))
+            history = await asyncio.to_thread(git_svc.get_file_history, rel_path, 50)
+            churn_data = {
+                "total_commits": len(history),
+                "recent_commits": len(history[:20]),
+            }
+            if history:
+                churn_data["last_modified"] = history[0].date.isoformat()
+                authors = {c.author for c in history}
+                churn_data["unique_authors"] = len(authors)
+        except Exception as exc:
+            logger.warning("Git churn lookup failed for %s: %s", fp, exc)
+            churn_error = str(exc)
+            churn_data = {"error": churn_error, "total_commits": 0, "recent_commits": 0}
+
+        # ── Health score ─────────────────────────────────────────────
+        health_score = 10.0
+        avg_cc = complexity_data.get("average", 0)
+        if avg_cc > 15:
+            health_score -= 4.0
+        elif avg_cc > 10:
+            health_score -= 2.5
+        elif avg_cc > 5:
+            health_score -= 1.0
+
+        total_commits = churn_data.get("total_commits", 0)
+        if total_commits > 100:
+            health_score -= 2.0
+        elif total_commits > 50:
+            health_score -= 1.0
+
+        health_score = max(0.0, min(10.0, health_score))
+        is_hotspot = avg_cc > 10 and total_commits > 30
+
+        recommendation: dict = {}
+        if avg_cc > 10:
+            recommendation["complexity"] = "Consider breaking down complex functions."
+        if total_commits > 50:
+            recommendation["churn"] = "High churn file — review for stability."
 
         return HealthResponse(
             file_path=str(fp),
-            health_score=result.get("health_score", 0.0),
-            complexity=result.get("complexity", {}),
-            churn=result.get("churn", {}),
-            recommendation=result.get("recommendation", {}),
-            is_hotspot=result.get("is_hotspot", False),
-            error=result.get("error"),
+            health_score=round(health_score, 1),
+            complexity=complexity_data,
+            churn=churn_data,
+            recommendation=recommendation,
+            is_hotspot=is_hotspot,
         )
 
     except HTTPException:
@@ -125,18 +225,13 @@ async def analyze_health(body: HealthRequest) -> HealthResponse:
 @router.post("/dependencies", response_model=DependencyResponse)
 async def analyze_dependencies(body: DependencyRequest) -> DependencyResponse:
     """
-    Parse imports using AST (Python) or regex (JS/TS) and return
-    the dependency list for the given file.
-
-    Uses ``src.code_parser.CodeParser`` and
-    ``src.documentation.dependency_analyzer.DependencyAnalyzer``.
+    Parse imports using the existing DependencyAnalyzer (AST for Python,
+    regex for JS/TS) and return the dependency list for the given file.
     """
     _validate_project(body.project_path)
     fp = _resolve_file(body.project_path, body.file_path)
 
     try:
-        content = fp.read_text(encoding="utf-8")
-
         ext = fp.suffix.lower()
         language = {
             ".py": "python",
@@ -146,35 +241,23 @@ async def analyze_dependencies(body: DependencyRequest) -> DependencyResponse:
             ".tsx": "typescript",
         }.get(ext, "unknown")
 
-        from src.documentation.dependency_analyzer import DependencyAnalyzer
-        from src.models.documentation_models import CodeElement
+        rel_path = str(fp.relative_to(Path(body.project_path).resolve()))
 
-        element = CodeElement(
-            element_id=str(fp),
-            element_type="file",
-            name=fp.name,
-            file_path=str(fp),
-            start_line=1,
-            end_line=len(content.splitlines()),
-            language=language,
-            code_content=content,
-            existing_doc=None,
-        )
+        from server.services.impact_engine import DependencyAnalyzer
 
         analyzer = DependencyAnalyzer()
-        deps = analyzer.analyze_dependencies(element, [])
+        content = fp.read_text(encoding="utf-8")
+        records = analyzer.extract_imports(content, rel_path)
 
-        imports = [d.name for d in deps if d.dependency_type == "import"]
-        calls = [d.name for d in deps if d.dependency_type == "function_call"]
-        inheritance = [d.name for d in deps if d.dependency_type == "inheritance"]
+        imports = [r.raw_specifier for r in records]
 
         return DependencyResponse(
             file_path=str(fp),
             language=language,
             imports=imports,
-            function_calls=calls,
-            inheritance=inheritance,
-            total_dependencies=len(deps),
+            function_calls=[],
+            inheritance=[],
+            total_dependencies=len(records),
         )
 
     except HTTPException:

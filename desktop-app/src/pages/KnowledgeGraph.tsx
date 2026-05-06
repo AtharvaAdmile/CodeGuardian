@@ -29,24 +29,6 @@ const COLORS = {
   text: { secondary: "#94A3B8", muted: "#64748B" },
 };
 
-interface FileNode {
-  id: string;
-  name: string;
-  path: string;
-  size: number;
-  type: "file" | "directory";
-  x?: number;
-  y?: number;
-  fx?: number | null;
-  fy?: number | null;
-}
-
-interface FileLink {
-  source: string | FileNode;
-  target: string | FileNode;
-  type?: string;
-}
-
 export default function KnowledgeGraph() {
   const { projectPath } = useProjectContext();
   const svgRef = useRef<SVGSVGElement>(null);

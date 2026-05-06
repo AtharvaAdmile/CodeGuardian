@@ -37,10 +37,13 @@ router = APIRouter(prefix="/api", tags=["indexing"])
 
 # ── Constants ───────────────────────────────────────────────────────────
 _SUPPORTED_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx"}
-_SKIP_DIRS = {"node_modules", "__pycache__", ".git", "venv", "dist", "build"}
+_SKIP_DIRS = {"node_modules", "__pycache__", ".git", "venv", ".venv", "dist", "build",
+              "chroma_data", "generated_test_cases", ".codeguardian", "coverage"}
 _EMBED_BATCH_SIZE = 32
 _CONTEXT_OVERLAP_LINES = 2
 _DECISION_COMMIT_LIMIT = 50  # Recent commits to process for decisions
+_MAX_CHUNK_LINES = 40         # Max lines per chunk — keeps well under the 512-token NIM limit
+_OVERLAP_LINES = 5            # Overlap between sub-chunks for continuity
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -287,14 +290,58 @@ def _chunk_js_ts(content: str, file_path: str, language: str) -> list[dict]:
     return chunks
 
 
+def _split_oversized(chunks: list[dict]) -> list[dict]:
+    """
+    Split any chunk exceeding _MAX_CHUNK_LINES into smaller sub-chunks
+    with _OVERLAP_LINES of overlap for continuity.
+
+    This is the PROPER fix for the 512-token NIM limit — split at line
+    boundaries so each sub-chunk is semantically coherent, instead of
+    silently truncating mid-line.
+    """
+    result: list[dict] = []
+    for chunk in chunks:
+        text = chunk["text"]
+        if not text or not text.strip():
+            continue  # Drop empty/whitespace-only chunks at the source
+
+        lines = text.splitlines()
+        if len(lines) <= _MAX_CHUNK_LINES:
+            result.append(chunk)
+            continue
+
+        # Split into sub-chunks with overlap
+        start = 0
+        while start < len(lines):
+            end = min(start + _MAX_CHUNK_LINES, len(lines))
+            sub_text = "\n".join(lines[start:end])
+
+            if sub_text.strip():  # Only keep non-empty sub-chunks
+                result.append({
+                    "text": sub_text,
+                    "start_line": chunk["start_line"] + start,
+                    "end_line": chunk["start_line"] + end - 1,
+                    "chunk_type": chunk["chunk_type"],
+                    "language": chunk["language"],
+                })
+
+            if end >= len(lines):
+                break
+            start = end - _OVERLAP_LINES  # Overlap for continuity
+
+    return result
+
+
 def _chunk_file(content: str, file_path: str) -> list[dict]:
-    """Dispatch to the correct language chunker."""
+    """Dispatch to the correct language chunker, then split oversized chunks."""
     ext = Path(file_path).suffix.lower()
     if ext == ".py":
-        return _chunk_python(content, file_path)
+        raw_chunks = _chunk_python(content, file_path)
+    else:
+        language = "typescript" if ext in {".ts", ".tsx"} else "javascript"
+        raw_chunks = _chunk_js_ts(content, file_path, language)
 
-    language = "typescript" if ext in {".ts", ".tsx"} else "javascript"
-    return _chunk_js_ts(content, file_path, language)
+    return _split_oversized(raw_chunks)
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -411,6 +458,18 @@ async def _flush_batch(
     status: IndexStatus,
 ) -> None:
     """Embed a batch of texts and upsert to the vector store."""
+    # Safety net: drop any empty texts that slipped through the chunker
+    filtered = [
+        (i, t, m) for i, t, m in zip(ids, texts, metas)
+        if t and t.strip()
+    ]
+    if not filtered:
+        return
+    if filtered:
+        ids, texts, metas = [item[0] for item in filtered], [item[1] for item in filtered], [item[2] for item in filtered]
+    else:
+        ids, texts, metas = [], [], []
+
     try:
         embeddings = await embedding_service.embed_documents(texts)
 

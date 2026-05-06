@@ -23,8 +23,8 @@ def _check_component(resource: object | None) -> ComponentStatus:
     return ComponentStatus(status="ok")
 
 
-async def _check_llm(request: Request) -> ComponentStatus:
-    """Check the NIM LLM client health with an actual API ping."""
+def _check_llm(request: Request) -> ComponentStatus:
+    """Check the NIM LLM client health using cached last_healthy_at (no live API call)."""
     llm_client = getattr(request.app.state, "llm_client", None)
 
     if llm_client is None:
@@ -33,23 +33,12 @@ async def _check_llm(request: Request) -> ComponentStatus:
             detail="NVIDIA_NIM_API_KEY not set or client not created",
         )
 
-    try:
-        healthy = await llm_client.is_healthy()
-    except Exception:
-        healthy = False
-
     last_at = llm_client.last_healthy_at
-    detail = None
     if last_at:
         dt = datetime.fromtimestamp(last_at, tz=timezone.utc)
-        detail = f"last_healthy_at={dt.isoformat()}"
+        return ComponentStatus(status="ok", detail=f"last_healthy_at={dt.isoformat()}")
 
-    if healthy:
-        return ComponentStatus(status="ok", detail=detail)
-    return ComponentStatus(
-        status="error",
-        detail=detail or "Health check failed — NIM API unreachable",
-    )
+    return ComponentStatus(status="warming_up", detail="NIM warm-up in progress")
 
 
 @router.get("/health", response_model=HealthStatus)
@@ -66,7 +55,7 @@ async def health_check(request: Request) -> HealthStatus:
         "vector_store": _check_component(
             getattr(request.app.state, "vector_service", None)
         ),
-        "llm": await _check_llm(request),
+        "llm": _check_llm(request),
         "supabase": _check_component(None),  # Not wired yet
     }
 
@@ -76,6 +65,8 @@ async def health_check(request: Request) -> HealthStatus:
         overall = "healthy"
     elif any(s == "error" for s in statuses):
         overall = "unhealthy"
+    elif any(s in ("warming_up", "degraded", "not_initialized") for s in statuses):
+        overall = "degraded"
     else:
         overall = "degraded"
 

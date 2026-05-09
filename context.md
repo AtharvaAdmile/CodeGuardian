@@ -14,8 +14,7 @@ All clients talk to a central **FastAPI hub on port 8742**. No client touches th
 cgctl CLI ─────────────────────┐
 Desktop Electron App ──────────┼──→ FastAPI server (:8742) ──→ NVIDIA NIM API
 MCP Server (stdio/SSE) ───────┘         │
-                                          ├──→ ChromaDB (local, always)
-                                          ├──→ Supabase pgvector (optional)
+                                          ├──→ ChromaDB (local storage)
                                           └──→ .codeguardian/ (JSON persistence)
 ```
 
@@ -24,7 +23,7 @@ MCP Server (stdio/SSE) ───────┘         │
 - **Single LLM Provider**: Everything routes through NVIDIA NIM's OpenAI-compatible API. No OpenAI, no Ollama, no local models.
 - **Offline Mode**: The CLI can bypass HTTP and import Python services directly via `--offline`.
 - **Graceful Degradation**: Every service is optional. If the NIM API key is missing, LLM-dependent features are disabled but the server still starts.
-- **Dual-Write Vector Store**: ChromaDB for local fast search + optional Supabase pgvector for cloud persistence.
+- **Vector Store**: ChromaDB for local persistent vector storage.
 - **Context-YAML**: A new system (being phased in) that generates `.context.yaml` files per directory via LLM analysis, complementing/replacing vector-based retrieval.
 
 ---
@@ -43,7 +42,7 @@ CG_2/
 │   ├── routes/                 # FastAPI route modules
 │   │   ├── health.py           # GET /api/health — server + service status
 │   │   ├── query.py            # POST /api/ask, /api/ask/stream — RAG Q&A
-│   │   ├── indexing.py         # POST /api/index — 4-phase indexing pipeline
+│   │   ├── indexing.py         # POST /api/index — 2-phase indexing pipeline
 │   │   ├── analysis.py         # File analysis (expert, history, overview)
 │   │   ├── analysis_extended.py# Extended analysis endpoints
 │   │   ├── impact.py           # Blast-radius analysis, breaking changes
@@ -150,18 +149,16 @@ CG_2/
 
 ---
 
-## Indexing Pipeline (4 Phases)
+## Indexing Pipeline (2 Phases)
 
 `POST /api/index` starts a background job:
 
 | Phase | Work |
 |-------|------|
-| 1 | Walk files → AST chunk (Python) or regex chunk (JS/TS) → NIM embeddings (batches of 32) → upsert to ChromaDB + Supabase |
-| 2 | `git blame` → expertise map (author → files) |
-| 3 | Last 50 commits → LLM decision extraction → stored in DecisionService |
-| 4 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
+| 1 | Walk files → chunk → NIM embeddings (batches of 32) → upsert to ChromaDB |
+| 2 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
 
-Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code is immediately searchable); Phases 2–4 run concurrently in the background.
+Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code is immediately searchable); Phase 2 (knowledge graph) runs after.
 
 ---
 
@@ -178,15 +175,15 @@ Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code 
 - Deterministic IDs: `SHA256(project_id + file_path + chunk_index)`.
 
 ### VectorService (`server/services/vector_service.py`)
-- ChromaDB PersistentClient (always) + optional Supabase pgvector (best-effort).
-- Search: ChromaDB first, Supabase supplement if fewer than top_k results.
+- ChromaDB PersistentClient (local only). No cloud dependency.
 - Collections namespaced as `cg_{project_id}`.
+- CRUD: `upsert()`, `search()`, `delete_project()`, `has_project_index()`, `get_project_index_count()`.
 
 ### KnowledgeGraph (`server/services/knowledge_graph.py`)
 - NetworkX `DiGraph` with node types: `file`, `function`, `decision`, `author`, `module`.
 - Edge types: `imports`, `contains`, `decided_by`, `affects`, `owns`, `belongs_to`.
 - Always rebuilt from scratch (never patched incrementally).
-- Persisted to `.codeguardian/knowledge_graph.json` + optional Supabase JSONB.
+- Persisted to `.codeguardian/knowledge_graph.json`.
 - AST-based Python import resolution; regex-based JS/TS import resolution.
 
 ### GitService (`server/services/git_service.py`)
@@ -260,7 +257,7 @@ All tools are thin HTTP proxies to the FastAPI server — no direct DB/LLM acces
 | GET | `/api/health` | Server + service health status |
 | POST | `/api/ask` | RAG Q&A with sources, decisions, experts |
 | POST | `/api/ask/stream` | SSE streaming Q&A |
-| POST | `/api/index` | Start 4-phase indexing job |
+| POST | `/api/index` | Start 2-phase indexing job |
 | GET | `/api/index/status/{job_id}` | Index job progress |
 | GET | `/api/index/projects` | List indexed projects |
 | GET | `/api/analyze/expert` | File expert analysis |
@@ -386,10 +383,10 @@ LOG_LEVEL=INFO
 
 | Data | Storage |
 |------|---------|
-| Vector embeddings | ChromaDB (`./chroma_data/`) + optional Supabase `code_embeddings` table |
-| Knowledge graph | `.codeguardian/knowledge_graph.json` + optional Supabase `projects.config_json` |
-| Expertise maps | `.codeguardian/expertise/expertise_map.json` + optional Supabase `expertise_map` table |
-| Architectural decisions | Local `.codeguardian/decisions/` JSON + Supabase |
+| Vector embeddings | ChromaDB (`./chroma_data/`) |
+| Knowledge graph | `.codeguardian/knowledge_graph.json` |
+| Expertise maps | `.codeguardian/expertise/expertise_map.json` |
+| Architectural decisions | Local `.codeguardian/decisions/` JSON |
 | Context-YAML files | `.context.yaml` in each directory (checked into git) |
 
 ---
@@ -409,3 +406,32 @@ LOG_LEVEL=INFO
 - Git hooks (`cgctl hooks install`) are implemented.
 - PLAN.md outlines the full migration from vector-based to context-YAML-based architecture.
 - Tests exist for context models, context service, decision extractor/service, embedding/vector, and git service.
+
+---
+
+## Session Log
+
+### Session: Indexing pipeline cleanup + Supabase removal
+
+**Supabase removed:** `vector_service.py` stripped of all Supabase code — now ChromaDB-only with `has_project_index()`, `get_project_index_count()`, `delete_project()`. `config.py` still has unused `supabase_url`/`supabase_key` (harmless). `decision_service.py` and `knowledge_graph.py` still have benign `supabase_client=None` fallbacks.
+
+**Indexing pipeline reduced to 2 phases:**
+| Phase | Work |
+|-------|------|
+| 1 | Walk files → chunk → NIM embeddings (batches of 32) → upsert to ChromaDB |
+| 2 | Rebuild NetworkX knowledge graph → persist to `.codeguardian/knowledge_graph.json` |
+
+Removed Phase 2 (expertise mapping via `git blame`) and Phase 3 (LLM decision extraction from last 50 commits). `IndexStatus` schema simplified accordingly — removed `expertise_status`, `expertise_files_mapped`, `decision_status`, `decisions_commits_processed`, `decisions_found`. CLI (`cgctl/index.py`) updated to 2-phase display. Scratch file `rewrite_indexing.js` deleted.
+
+**New endpoints:**
+- `GET /api/index/estimate/{project_id}` — pre-index file count, chunk estimate by extension and directory
+- `GET /api/index/history/{project_id}` / `DELETE /api/index/history/{project_id}` — per-project index history persisted to `.codeguardian/index_history/`
+- `DELETE /api/index/{project_id}` — delete entire project index from ChromaDB
+- `GET /api/index/check/{project_id}` — check if already indexed, return chunk count
+
+**Frontend changes:**
+- **Indexing.tsx**: 3-tab file selector (By File Type / By Extension / By Directory) with real-time selected files/chunks count. Delete Index button. History accordion loading from backend. **Bug fix**: added `setIsIndexing(false)` + `setCurrentFile(null)` on completion so the processing view transitions back to idle. Added `setCurrentFile(status.current_file)` during polling for live file progress.
+- **Dashboard.tsx**: Replaced stale "Decisions Captured" → "Graph Nodes", "Experts Mapped" → "Graph Edges". Removed unused `Users` import. Label "Files Indexed" → "Total Files".
+- **dashboard.py**: Updated docstrings to remove stale metric descriptions.
+
+**Docstring cleanup**: `indexing.py` module header, `_phase1_index_code` return doc, and `start_indexing` endpoint doc all updated from "4-phase" / "expertise + decision extraction" references to the current 2-phase pipeline.

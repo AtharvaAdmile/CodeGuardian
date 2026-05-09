@@ -29,6 +29,23 @@ const COLORS = {
   text: { secondary: "#94A3B8", muted: "#64748B" },
 };
 
+const CODE_EXTENSIONS = new Set([
+  ".py", ".js", ".jsx", ".ts", ".tsx",
+  ".css", ".scss", ".less",
+  ".json", ".yaml", ".yml", ".toml",
+  ".html", ".htm",
+  ".c", ".cpp", ".h", ".hpp",
+  ".java", ".kt", ".kts",
+  ".rs", ".go", ".rb",
+  ".vue", ".svelte",
+  ".sql",
+]);
+
+function getExtension(name: string): string {
+  const idx = name.lastIndexOf(".");
+  return idx >= 0 ? name.slice(idx) : "";
+}
+
 export default function KnowledgeGraph() {
   const { projectPath } = useProjectContext();
   const svgRef = useRef<SVGSVGElement>(null);
@@ -36,6 +53,7 @@ export default function KnowledgeGraph() {
 
   const [files, setFiles] = useState<FileNode[]>([]);
   const [dependencyLinks, setDependencyLinks] = useState<FileLink[]>([]);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
   const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -54,7 +72,24 @@ export default function KnowledgeGraph() {
           size: f.size,
           type: f.type,
         }));
-        setFiles(mapped);
+
+        const dirs = mapped.filter((f) => f.type === "directory");
+        const codeFiles = mapped.filter(
+          (f) => f.type === "file" && CODE_EXTENSIONS.has(getExtension(f.name))
+        );
+
+        const ancestorPaths = new Set<string>();
+        codeFiles.forEach((f) => {
+          const parts = f.path.split("/");
+          for (let i = 1; i < parts.length; i++) {
+            ancestorPaths.add(parts.slice(0, i).join("/"));
+          }
+        });
+
+        const keptDirs = dirs.filter((d) => ancestorPaths.has(d.path));
+
+        setFiles([...codeFiles, ...keptDirs]);
+        setCollapsedDirs(new Set(keptDirs.filter((d) => d.path !== ".").map((d) => d.path)));
 
         const depGraph = await analyzeProjectDependencies(projectPath);
         if (depGraph && depGraph.links) {
@@ -107,8 +142,32 @@ export default function KnowledgeGraph() {
       }
     });
 
-    return { nodes: Array.from(nodesMap.values()), links };
-  }, [files, dependencyLinks]);
+    const allNodes = Array.from(nodesMap.values());
+
+    if (collapsedDirs.size > 0) {
+      const isHidden = (node: FileNode) => {
+        if (node.path === ".") return false;
+        const parts = node.path.split("/");
+        for (let i = 1; i < parts.length; i++) {
+          const ancestorPath = parts.slice(0, i).join("/");
+          if (ancestorPath !== node.path && collapsedDirs.has(ancestorPath)) return true;
+        }
+        return false;
+      };
+
+      const visibleNodes = allNodes.filter((n) => !isHidden(n));
+      const visibleIds = new Set(visibleNodes.map((n) => n.id));
+      const visibleLinks = links.filter(
+        (l) =>
+          visibleIds.has(typeof l.source === "string" ? l.source : (l.source as FileNode).id) &&
+          visibleIds.has(typeof l.target === "string" ? l.target : (l.target as FileNode).id)
+      );
+
+      return { nodes: visibleNodes, links: visibleLinks };
+    }
+
+    return { nodes: allNodes, links };
+  }, [files, dependencyLinks, collapsedDirs]);
 
   useEffect(() => {
     if (!svgRef.current || !wrapperRef.current || graphData.nodes.length === 0) return;
@@ -153,12 +212,31 @@ export default function KnowledgeGraph() {
       .join("circle")
       .attr("r", (d) => d.type === "directory" ? 15 : 5 + Math.min(10, Math.sqrt(d.size || 0) * 0.5))
       .attr("fill", (d) => d.type === "directory" ? COLORS.accent.blue : COLORS.text.muted)
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 1)
+      .attr("stroke", (d) =>
+        d.type === "directory" && collapsedDirs.has(d.path) ? COLORS.accent.blue : "#fff"
+      )
+      .attr("stroke-width", (d) =>
+        d.type === "directory" && collapsedDirs.has(d.path) ? 2 : 1
+      )
+      .attr("stroke-dasharray", (d) =>
+        d.type === "directory" && collapsedDirs.has(d.path) ? "4,2" : "none"
+      )
       .style("cursor", "pointer")
       .on("click", (event, d) => {
         event.stopPropagation();
-        setSelectedNode(d);
+        if (d.type === "directory") {
+          setCollapsedDirs((prev) => {
+            const next = new Set(prev);
+            if (next.has(d.path)) {
+              next.delete(d.path);
+            } else {
+              next.add(d.path);
+            }
+            return next;
+          });
+        } else {
+          setSelectedNode(d);
+        }
       });
 
     const label = g.append("g")
@@ -195,7 +273,7 @@ export default function KnowledgeGraph() {
     return () => {
       simulation.stop();
     };
-  }, [graphData]);
+  }, [graphData, collapsedDirs]);
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return;

@@ -73,7 +73,7 @@ async def cg_pilot_chat(body: CGPilotRequest, request: Request) -> CGPilotRespon
         )
 
     try:
-        answer, sources, tools_used = await service.chat(
+        answer, sources, tools_used, steps = await service.chat(
             project_id=body.project_id,
             project_path=body.project_path,
             message=body.message,
@@ -84,6 +84,7 @@ async def cg_pilot_chat(body: CGPilotRequest, request: Request) -> CGPilotRespon
             answer=answer,
             sources=sources,
             tools_used=tools_used,
+            steps=steps,
             indexed=True,
         )
     except NotImplementedError as exc:

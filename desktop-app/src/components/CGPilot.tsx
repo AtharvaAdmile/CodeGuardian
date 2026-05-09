@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
+  ChevronDown,
+  ChevronRight,
   FileText,
+  Lightbulb,
   Loader2,
   Maximize2,
   MessageCircle,
@@ -14,7 +17,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { askCGPilot, getCGPilotStatus } from "../lib/api";
-import type { CGPilotStatus, CGPilotToolUse, SourceRef } from "../lib/types";
+import type { CGPilotStep, CGPilotStatus, CGPilotToolUse, SourceRef } from "../lib/types";
 
 interface CGPilotProps {
   projectId: string;
@@ -28,6 +31,7 @@ interface ChatMessage {
   content: string;
   sources?: SourceRef[];
   tools?: CGPilotToolUse[];
+  steps?: CGPilotStep[];
 }
 
 function SourceList({ sources }: { sources: SourceRef[] }) {
@@ -61,21 +65,85 @@ function SourceList({ sources }: { sources: SourceRef[] }) {
   );
 }
 
-function ToolList({ tools }: { tools: CGPilotToolUse[] }) {
-  if (tools.length === 0) return null;
+function stepIcon(action: string) {
+  switch (action) {
+    case "plan":
+      return <Lightbulb className="h-3.5 w-3.5 text-amber-400" />;
+    case "tool_call":
+      return <Wrench className="h-3.5 w-3.5 text-accent-cyan" />;
+    case "observation":
+      return <FileText className="h-3.5 w-3.5 text-accent-blue" />;
+    case "final":
+      return <Bot className="h-3.5 w-3.5 text-accent-green" />;
+    default:
+      return <Bot className="h-3.5 w-3.5" />;
+  }
+}
+
+function stepLabel(action: string) {
+  switch (action) {
+    case "plan":
+      return "Plans";
+    case "tool_call":
+      return "Tool call";
+    case "observation":
+      return "Analyses";
+    case "final":
+      return "Answer";
+    default:
+      return action;
+  }
+}
+
+function StepTimeline({ steps }: { steps: CGPilotStep[] }) {
+  if (steps.length === 0) return null;
+
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {tools.slice(0, 5).map((tool, index) => (
-        <span
-          key={`${tool.name}-${index}`}
-          className="inline-flex items-center gap-1 rounded-md border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-muted"
-          title={tool.summary}
-        >
-          <Wrench className="h-3 w-3" />
-          {tool.name}
-        </span>
-      ))}
+    <div className="mt-3 border-t border-border pt-2">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-xs font-medium text-text-muted hover:text-text-secondary transition-colors"
+      >
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5" />
+        )}
+        <Wrench className="h-3 w-3" />
+        {steps.length} step{steps.length > 1 ? "s" : ""} taken
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-1.5 pl-3 border-l-2 border-border">
+          {steps.map((step, index) => (
+            <div key={index} className="flex gap-2 text-xs">
+              <div className="mt-0.5 flex-shrink-0">
+                {stepIcon(step.action)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-text-muted">
+                  <span className="rounded bg-bg-tertiary px-1 font-mono text-[10px]">
+                    #{step.round}
+                  </span>
+                  <span>{stepLabel(step.action)}</span>
+                  {step.tool_name && (
+                    <code className="rounded bg-bg-tertiary px-1 font-mono text-[10px] text-accent-cyan">
+                      {step.tool_name}
+                    </code>
+                  )}
+                </div>
+                {(step.message || step.tool_summary) && (
+                  <p className="mt-0.5 leading-relaxed text-text-secondary">
+                    {step.message || step.tool_summary}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -162,6 +230,7 @@ export function CGPilot({ projectId, projectPath, indexStatus }: CGPilotProps) {
           content: response.answer,
           sources: response.sources,
           tools: response.tools_used,
+          steps: response.steps,
         },
       ]);
     } catch (err) {
@@ -305,7 +374,7 @@ export function CGPilot({ projectId, projectPath, indexStatus }: CGPilotProps) {
                         </div>
                         {message.role === "assistant" && (
                           <>
-                            <ToolList tools={message.tools || []} />
+                            <StepTimeline steps={message.steps || []} />
                             <SourceList sources={message.sources || []} />
                           </>
                         )}

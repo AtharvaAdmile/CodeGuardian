@@ -105,12 +105,25 @@ class CGPilotToolUse(BaseModel):
     summary: str = ""
 
 
+class CGPilotStep(BaseModel):
+    """A single step in the agentic reasoning loop."""
+
+    round: int = Field(..., description="Round number (1-indexed).")
+    action: str = Field(
+        ..., description="One of: plan, tool_call, observation, final"
+    )
+    tool_name: str = ""
+    tool_summary: str = ""
+    message: str = ""
+
+
 class CGPilotResponse(BaseModel):
     """Response from POST /api/cg-pilot/chat."""
 
     answer: str
     sources: list[SourceRef] = Field(default_factory=list)
     tools_used: list[CGPilotToolUse] = Field(default_factory=list)
+    steps: list[CGPilotStep] = Field(default_factory=list)
     indexed: bool = True
 
 

@@ -1,8 +1,8 @@
 """
-Dual-Write Vector Service.
+ChromaDB Vector Service.
 
-ChromaDB for fast local search (always available).
-Supabase pgvector for team sharing (optional).
+Local vector store only — ChromaDB PersistentClient for fast local search.
+No Supabase, no remote storage.
 
 CodeGuardian works offline with just ChromaDB — it can search existing
 embeddings but can't generate new ones without the NIM API.
@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 import chromadb
+import os
 
 from server.models.embedding_models import SearchResult, VectorDocument
 
@@ -22,13 +23,10 @@ logger = logging.getLogger("codeguardian.vector")
 
 class VectorService:
     """
-    Dual-write vector store: ChromaDB (local) + optional Supabase (remote).
+    ChromaDB vector store.
 
     Usage:
-        service = VectorService(
-            chromadb_dir="./chroma_data",
-            supabase_client=supabase_client,  # or None for offline
-        )
+        service = VectorService(chromadb_dir="./chroma_data")
         await service.upsert("my_project", documents)
         results = await service.search("my_project", query_embedding, top_k=10)
     """
@@ -36,31 +34,22 @@ class VectorService:
     def __init__(
         self,
         chromadb_dir: str,
-        supabase_client: Any | None = None,
     ) -> None:
-        # ── ChromaDB (always available) ──────────────────────────────
-        self._chroma_client = chromadb.PersistentClient(path=chromadb_dir)
-        self._chromadb_dir = chromadb_dir
+        try:
+            os.makedirs(chromadb_dir, exist_ok=True)
+            self._chroma_client = chromadb.PersistentClient(path=chromadb_dir)
+            logger.info("Initialized Persistent ChromaDB at %s", chromadb_dir)
+        except Exception as e:
+            logger.warning("Failed to initialize Persistent ChromaDB (%s). Falling back to InMemoryClient.", e)
+            self._chroma_client = chromadb.InMemoryClient()
 
-        # ── Supabase (optional) ──────────────────────────────────────
-        self._supabase = supabase_client
-
-        logger.info(
-            "VectorService initialised — chromadb_dir=%s  supabase=%s",
-            chromadb_dir,
-            "connected" if supabase_client else "disabled",
-        )
-
-    # ── Public API ───────────────────────────────────────────────────────
+        logger.info("VectorService initialised — chromadb_dir=%s", chromadb_dir)
 
     async def upsert(
         self, project_id: str, documents: list[VectorDocument]
     ) -> None:
         """
-        Insert or update documents in both stores.
-
-        ChromaDB write is always performed. Supabase write is best-effort
-        (failures are logged but do not raise).
+        Insert or update documents in ChromaDB.
 
         Args:
             project_id: The project identifier for collection namespacing.
@@ -71,7 +60,6 @@ class VectorService:
 
         collection_name = f"cg_{project_id}"
 
-        # ── ChromaDB upsert ──────────────────────────────────────────
         collection = self._chroma_client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -90,46 +78,6 @@ class VectorService:
             collection_name,
         )
 
-        # ── Supabase upsert (best-effort) ────────────────────────────
-        if self._supabase is not None:
-            try:
-                # Map VectorDocument fields to code_embeddings table columns.
-                # Structured fields are extracted from metadata; everything
-                # else goes into the metadata_json JSONB column.
-                _structured_keys = {
-                    "file_path", "chunk_type", "language",
-                    "start_line", "end_line",
-                }
-                rows = [
-                    {
-                        "id": doc.id,
-                        "project_id": project_id,
-                        "file_path": doc.metadata.get("file_path", ""),
-                        "chunk_text": doc.text,
-                        "chunk_type": doc.metadata.get("chunk_type"),
-                        "language": doc.metadata.get("language"),
-                        "start_line": doc.metadata.get("start_line"),
-                        "end_line": doc.metadata.get("end_line"),
-                        "embedding": doc.embedding,  # list[float] — Supabase handles vector conversion
-                        "metadata_json": {
-                            k: v
-                            for k, v in doc.metadata.items()
-                            if k not in _structured_keys
-                        },
-                    }
-                    for doc in documents
-                ]
-                self._supabase.table("code_embeddings").upsert(rows).execute()
-
-                logger.debug(
-                    "Supabase upsert: %d rows into code_embeddings",
-                    len(rows),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Supabase upsert failed (non-fatal): %s", exc
-                )
-
     async def search(
         self,
         project_id: str,
@@ -138,11 +86,7 @@ class VectorService:
         filters: dict | None = None,
     ) -> list[SearchResult]:
         """
-        Search for similar documents.
-
-        Always queries ChromaDB first (fast, local). If ChromaDB returns
-        fewer than top_k results and Supabase is available, supplements
-        with remote results and deduplicates by ID.
+        Search for similar documents in ChromaDB.
 
         Args:
             project_id:      Project to search within.
@@ -154,14 +98,9 @@ class VectorService:
             List of SearchResult objects sorted by score (descending).
         """
         collection_name = f"cg_{project_id}"
-        results: list[SearchResult] = []
-        seen_ids: set[str] = set()
 
-        # ── ChromaDB search ──────────────────────────────────────────
         try:
-            collection = self._chroma_client.get_collection(
-                name=collection_name
-            )
+            collection = self._chroma_client.get_collection(name=collection_name)
 
             query_params: dict[str, Any] = {
                 "query_embeddings": [query_embedding],
@@ -172,17 +111,15 @@ class VectorService:
 
             chroma_results = collection.query(**query_params)
 
-            # Unpack ChromaDB's nested list format
             ids = chroma_results.get("ids", [[]])[0]
             documents = chroma_results.get("documents", [[]])[0]
             distances = chroma_results.get("distances", [[]])[0]
             metadatas = chroma_results.get("metadatas", [[]])[0]
 
+            results: list[SearchResult] = []
             for doc_id, text, distance, metadata in zip(
                 ids, documents, distances, metadatas
             ):
-                # ChromaDB returns distances; convert to similarity score
-                # For cosine space: similarity = 1 - distance
                 score = 1.0 - distance
                 results.append(
                     SearchResult(
@@ -192,80 +129,39 @@ class VectorService:
                         metadata=metadata or {},
                     )
                 )
-                seen_ids.add(doc_id)
+
+            results.sort(key=lambda r: r.score, reverse=True)
+            return results[:top_k]
 
         except Exception as exc:
-            # Collection might not exist yet
             logger.debug(
                 "ChromaDB search skipped for '%s': %s",
                 collection_name,
                 exc,
             )
+            return []
 
-        # ── Supabase supplement (if needed) ──────────────────────────
-        if len(results) < top_k and self._supabase is not None:
-            try:
-                remaining = top_k - len(results)
-                rpc_response = (
-                    self._supabase.rpc(
-                        "match_code_embeddings",
-                        {
-                            "query_embedding": query_embedding,
-                            "match_count": remaining,
-                            "filter_project_id": project_id,
-                        },
-                    ).execute()
-                )
+    def has_project_index(self, project_id: str) -> bool:
+        """Return True when ChromaDB has at least one vector for a project."""
+        collection_name = f"cg_{project_id}"
+        try:
+            collection = self._chroma_client.get_collection(name=collection_name)
+            return collection.count() > 0
+        except Exception:
+            return False
 
-                for row in rpc_response.data or []:
-                    row_id = row["id"]
-                    if row_id not in seen_ids:
-                        # Reconstruct metadata from structured columns
-                        # + the metadata_json JSONB blob.
-                        metadata = row.get("metadata_json") or {}
-                        metadata.update(
-                            {
-                                "file_path": row.get("file_path", ""),
-                                "chunk_type": row.get("chunk_type"),
-                                "language": row.get("language"),
-                                "start_line": row.get("start_line"),
-                                "end_line": row.get("end_line"),
-                            }
-                        )
-                        results.append(
-                            SearchResult(
-                                id=row_id,
-                                text=row.get("chunk_text", ""),
-                                score=row.get("similarity", 0.0),
-                                metadata=metadata,
-                            )
-                        )
-                        seen_ids.add(row_id)
-
-                logger.debug(
-                    "Supabase supplemented %d additional results",
-                    len(rpc_response.data or []),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Supabase search failed (non-fatal): %s", exc
-                )
-
-        # Sort by score descending
-        results.sort(key=lambda r: r.score, reverse=True)
-
-        return results[:top_k]
+    def get_project_index_count(self, project_id: str) -> int:
+        """Return the number of chunks in ChromaDB for a project."""
+        collection_name = f"cg_{project_id}"
+        try:
+            collection = self._chroma_client.get_collection(name=collection_name)
+            return collection.count()
+        except Exception:
+            return 0
 
     async def delete_project(self, project_id: str) -> None:
-        """
-        Delete all vectors for a project from both stores.
-
-        Args:
-            project_id: The project to remove.
-        """
+        """Delete all vectors for a project from ChromaDB."""
         collection_name = f"cg_{project_id}"
-
-        # ── ChromaDB ─────────────────────────────────────────────────
         try:
             self._chroma_client.delete_collection(name=collection_name)
             logger.info("Deleted ChromaDB collection '%s'", collection_name)
@@ -275,22 +171,6 @@ class VectorService:
                 collection_name,
                 exc,
             )
-
-        # ── Supabase ─────────────────────────────────────────────────
-        if self._supabase is not None:
-            try:
-                self._supabase.table("code_embeddings").delete().eq(
-                    "project_id", project_id
-                ).execute()
-                logger.info(
-                    "Deleted Supabase rows for project '%s'", project_id
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Supabase delete failed for project '%s': %s",
-                    project_id,
-                    exc,
-                )
 
     async def close(self) -> None:
         """Cleanup resources."""

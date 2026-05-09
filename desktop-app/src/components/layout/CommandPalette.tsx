@@ -2,11 +2,8 @@ import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
-  MessageSquare,
   GitBranch,
-  Zap,
-  GraduationCap,
-  ShieldCheck,
+  GitCommit,
   FolderTree,
   Database,
   Settings,
@@ -22,11 +19,8 @@ interface CommandPaletteProps {
 
 const navigationItems = [
   { path: "/", icon: LayoutDashboard, label: "Go to Dashboard" },
-  { path: "/ask", icon: MessageSquare, label: "Go to Q&A" },
   { path: "/graph", icon: GitBranch, label: "Go to Knowledge Graph" },
-  { path: "/impact", icon: Zap, label: "Go to Impact Analyzer" },
-  { path: "/onboard", icon: GraduationCap, label: "Go to Onboarding" },
-  { path: "/review", icon: ShieldCheck, label: "Go to Code Review" },
+  { path: "/review", icon: GitCommit, label: "Go to Commit Review" },
   { path: "/files", icon: FolderTree, label: "Go to File Explorer" },
   { path: "/indexing", icon: Database, label: "Go to Indexing" },
   { path: "/settings", icon: Settings, label: "Go to Settings" },

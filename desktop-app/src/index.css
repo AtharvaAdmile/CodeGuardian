@@ -13,8 +13,10 @@
   --text-secondary: #94A3B8;
   --text-muted: #64748B;
   --accent-blue: #3B82F6;
+  --accent-purple: #8B5CF6;
   --accent-green: #10B981;
   --accent-amber: #F59E0B;
+  --accent-yellow: #EAB308;
   --accent-red: #EF4444;
   --accent-violet: #8B5CF6;
   --accent-cyan: #06B6D4;
@@ -76,5 +78,35 @@ code, pre, .font-mono {
   
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+  }
+  
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  
+  @keyframes progress-stripe {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+  
+  .animate-shimmer {
+    animation: shimmer 2s ease-in-out infinite;
+  }
+  
+  .animate-progress-stripe {
+    animation: progress-stripe 1s ease-in-out infinite;
+  }
+  
+  .progress-bar-shimmer {
+    background: linear-gradient(90deg, #3B82F6 0%, #8B5CF6 50%, #3B82F6 100%);
+    background-size: 200% 100%;
+  }
+  
+  .spinner {
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    border-top-color: #3B82F6;
+    animation: spin 1s ease-in-out infinite;
   }
 }

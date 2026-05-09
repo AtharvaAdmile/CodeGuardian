@@ -81,11 +81,11 @@ export default function SettingsPage() {
 
             {Object.keys(healthStatus?.components || {}).length > 0 && (
               <div className="mt-4 space-y-2">
-                {Object.entries(healthStatus!.components).map(([name, status]) => (
+                {Object.entries(healthStatus!.components).map(([name, component]) => (
                   <div key={name} className="flex items-center justify-between text-sm">
                     <span className="text-text-secondary">{name}</span>
-                    <span className={status === "healthy" ? "text-accent-green" : "text-accent-amber"}>
-                      {status}
+                    <span className={component.status === "healthy" ? "text-accent-green" : "text-accent-amber"}>
+                      {component.status}
                     </span>
                   </div>
                 ))}

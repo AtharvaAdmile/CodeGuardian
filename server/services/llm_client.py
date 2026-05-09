@@ -4,7 +4,7 @@ NVIDIA NIM LLM Client.
 Exclusive LLM provider for CodeGuardian. All completion requests go through
 NVIDIA NIM's OpenAI-compatible chat/completions endpoint using raw httpx.
 
-Primary model: qwen/qwen3-coder-480b-a35b-instruct
+Primary model: openai/gpt-oss-120b
     - 480B total params, 35B active (MoE), 262K context
     - Supports function calling and thinking mode
 
@@ -53,7 +53,7 @@ class NIMClient:
         client = NIMClient(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key="nvapi-...",
-            model="qwen/qwen3-coder-480b-a35b-instruct",
+            model="openai/gpt-oss-120b",
         )
         response = await client.complete(
             messages=[{"role": "user", "content": "Hello"}],
@@ -65,7 +65,7 @@ class NIMClient:
         self,
         base_url: str,
         api_key: str,
-        model: str = "qwen/qwen3-coder-480b-a35b-instruct",
+        model: str = "openai/gpt-oss-120b",
         timeout: float = 120.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")

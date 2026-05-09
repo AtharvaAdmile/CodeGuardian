@@ -83,7 +83,7 @@ def _phase_str(status: str) -> str:
 
 
 def _build_status_table(status: dict) -> Table:
-    """Build a Rich table showing 4-phase indexing progress."""
+    """Build a Rich table showing 2-phase indexing progress."""
     table = Table(box=None, show_header=False, padding=(0, 1))
     table.add_column("Phase", style="bold", width=22)
     table.add_column("Status", width=18)
@@ -100,14 +100,9 @@ def _build_status_table(status: dict) -> Table:
         p1_det,
     )
 
-    # Phase 2–4
-    for label, key_status in (
-        ("2. Expertise mapping", "expertise_status"),
-        ("3. Decision extraction", "decision_status"),
-        ("4. Knowledge graph", "graph_status"),
-    ):
-        s = status.get(key_status, "pending")
-        table.add_row(label, _phase_str(s), "")
+    # Phase 2: Knowledge graph
+    gs = status.get("graph_status", "pending")
+    table.add_row("2. Knowledge graph", _phase_str(gs), "")
 
     return table
 
@@ -144,13 +139,11 @@ def _poll_index(client, job_id: str, project_id: str) -> bool:
                 cc = status.get("chunks_created", 0)
                 gn = status.get("graph_nodes", 0)
                 ge = status.get("graph_edges", 0)
-                dn = status.get("decisions_found", 0)
                 print_stats({
                     "Files indexed": fp,
                     "Chunks created": cc,
                     "Graph nodes": gn,
                     "Graph edges": ge,
-                    "Decisions found": dn,
                 })
                 if errors:
                     print_warning(f"{len(errors)} error(s) during indexing:")

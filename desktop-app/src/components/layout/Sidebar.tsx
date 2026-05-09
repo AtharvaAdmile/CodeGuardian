@@ -2,11 +2,8 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
-  MessageSquare,
   GitBranch,
-  Zap,
-  GraduationCap,
-  ShieldCheck,
+  GitCommit,
   FolderTree,
   Database,
   Settings,
@@ -22,11 +19,8 @@ interface SidebarProps {
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { path: "/ask", icon: MessageSquare, label: "Q&A" },
   { path: "/graph", icon: GitBranch, label: "Knowledge Graph" },
-  { path: "/impact", icon: Zap, label: "Impact Analyzer" },
-  { path: "/onboard", icon: GraduationCap, label: "Onboarding" },
-  { path: "/review", icon: ShieldCheck, label: "Code Review" },
+  { path: "/review", icon: GitCommit, label: "Commit Review" },
   { path: "/files", icon: FolderTree, label: "File Explorer" },
   { path: "/indexing", icon: Database, label: "Indexing" },
   { path: "/settings", icon: Settings, label: "Settings" },

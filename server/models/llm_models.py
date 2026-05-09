@@ -22,7 +22,7 @@ class NIMRequest:
     """
 
     messages: list[dict[str, str]]
-    model: str = "qwen/qwen3-coder-480b-a35b-instruct"
+    model: str = "openai/gpt-oss-120b"
     temperature: float = 0.7
     max_tokens: int = 4096
     stream: bool = False

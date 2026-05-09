@@ -1,26 +1,32 @@
 """
 Indexing routes — background codebase indexing with progress polling.
 
-3-phase pipeline:
-  Phase 1 (fast):       Code files → embeddings → vector store
-  Phase 2 (background): Git blame → expertise mapping
-  Phase 3 (background): Recent commits → decision extraction
+2-phase pipeline:
+  Phase 1 (fast): Code files → embeddings → vector store
+  Phase 2:        Knowledge graph rebuild
 
-POST  /api/index              → queue a background indexing job
-GET   /api/index/status/{id}  → poll job progress
+POST  /api/index                  → queue a background indexing job
+GET   /api/index/status/{id}      → poll job progress
+GET   /api/index/estimate/{pid}   → pre-index file estimate
+GET   /api/index/history/{pid}    → per-project index history
+DELETE /api/index/history/{pid}   → clear per-project history
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import logging
+import math
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from server.models.embedding_models import VectorDocument
 from server.models.route_schemas import (
@@ -28,6 +34,10 @@ from server.models.route_schemas import (
     IndexResponse,
     IndexStatus,
     JobStatus,
+    IndexEstimateResponse,
+    ExtensionEstimate,
+    DirectoryEstimate,
+    IndexHistoryEntry,
 )
 from server.services.embedding_service import NIMEmbeddingService
 
@@ -41,7 +51,6 @@ _SKIP_DIRS = {"node_modules", "__pycache__", ".git", "venv", ".venv", "dist", "b
               "chroma_data", "generated_test_cases", ".codeguardian", "coverage"}
 _EMBED_BATCH_SIZE = 32
 _CONTEXT_OVERLAP_LINES = 2
-_DECISION_COMMIT_LIMIT = 50  # Recent commits to process for decisions
 _MAX_CHUNK_LINES = 40         # Max lines per chunk — keeps well under the 512-token NIM limit
 _OVERLAP_LINES = 5            # Overlap between sub-chunks for continuity
 
@@ -355,15 +364,25 @@ async def _phase1_index_code(
     embedding_service: NIMEmbeddingService,
     vector_service,
     status: IndexStatus,
+    include_extensions: set[str] | None = None,
+    include_directories: list[str] | None = None,
 ) -> list[str]:
     """
     Walk the project, chunk files, embed, and upsert to the vector store.
 
-    Returns the list of relative file paths that were indexed (used by
-    Phase 2 for expertise mapping).
+    Returns the list of relative file paths that were indexed.
+
+    If *include_extensions* is provided, only files whose extension is in
+    the set are indexed (intersected with _SUPPORTED_EXTENSIONS).
+    If *include_directories* is provided, only files whose relative path
+    starts with one of the listed directory prefixes are indexed.
     """
     file_paths: list[Path] = []
     root = Path(project_path)
+
+    extensions = _SUPPORTED_EXTENSIONS
+    if include_extensions is not None:
+        extensions = _SUPPORTED_EXTENSIONS & include_extensions
 
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
@@ -371,8 +390,14 @@ async def _phase1_index_code(
         ]
         for fname in filenames:
             fp = Path(dirpath) / fname
-            if fp.suffix.lower() in _SUPPORTED_EXTENSIONS:
-                file_paths.append(fp)
+            ext = fp.suffix.lower()
+            if ext not in extensions:
+                continue
+            if include_directories:
+                rel = str(fp.relative_to(root))
+                if not any(rel.startswith(d) for d in include_directories):
+                    continue
+            file_paths.append(fp)
 
     status.files_total = len(file_paths)
     rel_paths: list[str] = []
@@ -392,6 +417,9 @@ async def _phase1_index_code(
 
         rel_path = str(fp.relative_to(root))
         rel_paths.append(rel_path)
+
+        status.current_file = rel_path
+
         file_chunks = _chunk_file(content, str(fp))
 
         for fc in file_chunks:
@@ -411,7 +439,6 @@ async def _phase1_index_code(
             )
             chunk_index += 1
 
-            # Flush when batch is full
             if len(pending_texts) >= _EMBED_BATCH_SIZE:
                 await _flush_batch(
                     embedding_service,
@@ -428,7 +455,6 @@ async def _phase1_index_code(
 
         status.files_processed += 1
 
-    # Flush remaining
     if pending_texts:
         await _flush_batch(
             embedding_service,
@@ -440,8 +466,10 @@ async def _phase1_index_code(
             status,
         )
 
+    status.current_file = None
+
     logger.info(
-        "Phase 1 complete: %d files, %d chunks indexed",
+        "Code indexing complete: %d files, %d chunks indexed",
         status.files_processed,
         status.chunks_created,
     )
@@ -487,130 +515,23 @@ async def _flush_batch(
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Phase 3: Recent Commits → Decision Extraction (background)
+# Phase 2: Knowledge Graph Build
 # ═════════════════════════════════════════════════════════════════════════
 
 
-async def _phase3_decision_extraction(
-    project_path: str,
-    status: IndexStatus,
-    decision_extractor=None,
-    decision_service=None,
-    embedding_service=None,
-) -> None:
-    """
-    Process recent commits through the decision extractor.
-
-    Stores found decisions via the DecisionService.
-    """
-    if decision_extractor is None:
-        logger.info("Phase 3 skipped — no DecisionExtractor available")
-        status.decision_status = "skipped"
-        return
-
-    status.decision_status = "running"
-
-    try:
-        from server.services.git_service import GitService, GitServiceError
-
-        try:
-            git_svc = GitService(project_path)
-        except GitServiceError as exc:
-            logger.warning("Phase 3 skipped — not a git repo: %s", exc)
-            status.decision_status = "skipped"
-            return
-
-        # Fetch recent commits (blocking I/O in thread)
-        commits = await asyncio.to_thread(
-            git_svc.get_recent_commits, _DECISION_COMMIT_LIMIT
-        )
-
-        if not commits:
-            logger.info("Phase 3 skipped — no commits found")
-            status.decision_status = "completed"
-            return
-
-        # Process commits through the extractor (rate-limited)
-        extraction_stats = await decision_extractor.process_commits_batch(
-            commits, git_svc
-        )
-
-        status.decisions_commits_processed = extraction_stats.total_processed
-        status.decisions_found = extraction_stats.decisions_found
-
-        # Store discovered decisions
-        if decision_service and extraction_stats.decisions:
-            project_id = Path(project_path).name  # Use dir name as project ID
-
-            for decision in extraction_stats.decisions:
-                try:
-                    # Optionally embed the decision for semantic search
-                    embedding = None
-                    if embedding_service:
-                        try:
-                            decision_text = (
-                                f"{decision.title}: {decision.context} "
-                                f"{decision.decision} {decision.reasoning}"
-                            )
-                            embeddings = await embedding_service.embed_documents(
-                                [decision_text]
-                            )
-                            embedding = embeddings[0]
-                        except Exception:
-                            pass  # Embedding failure is non-fatal
-
-                    await decision_service.store_decision(
-                        project_id=project_id,
-                        title=decision.title,
-                        context=decision.context,
-                        decision=decision.decision,
-                        reasoning=decision.reasoning,
-                        source_type=decision.source_type,
-                        source_ref=decision.source_ref,
-                        embedding=embedding,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to store decision '%s': %s",
-                        decision.title,
-                        exc,
-                    )
-
-        status.decision_status = "completed"
-        logger.info(
-            "Phase 3 complete: %d commits processed, %d decisions found",
-            extraction_stats.total_processed,
-            extraction_stats.decisions_found,
-        )
-
-    except Exception as exc:
-        logger.error("Phase 3 failed: %s", exc)
-        status.decision_status = "failed"
-        status.errors.append(f"decision extraction error: {exc}")
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# Phase 4: Knowledge Graph Build (background)
-# ═════════════════════════════════════════════════════════════════════════
-
-
-async def _phase4_knowledge_graph(
+async def _phase2_knowledge_graph(
     project_path: str,
     status: IndexStatus,
     knowledge_graph=None,
-    expertise_map: dict | None = None,
-    decisions: list | None = None,
-    supabase_client=None,
-    project_id: str = "",
 ) -> None:
     """
-    Rebuild the knowledge graph from scratch after Phase 2 & 3 complete.
+    Rebuild the knowledge graph from code structure.
 
     Runs in a thread pool since graph construction is CPU-bound.
     Persists to .codeguardian/knowledge_graph.json.
     """
     if knowledge_graph is None:
-        logger.info("Phase 4 skipped — no KnowledgeGraph available")
+        logger.info("Knowledge graph skipped — no KnowledgeGraph available")
         status.graph_status = "skipped"
         return
 
@@ -620,9 +541,6 @@ async def _phase4_knowledge_graph(
         await asyncio.to_thread(
             knowledge_graph.rebuild,
             project_path,
-            None,        # git_service: not needed post-phase-2
-            expertise_map,
-            decisions,
         )
 
         # Persist to disk
@@ -631,25 +549,19 @@ async def _phase4_knowledge_graph(
             knowledge_graph.save_to_json, str(persist_path)
         )
 
-        # Optional Supabase persistence
-        if supabase_client and project_id:
-            await asyncio.to_thread(
-                knowledge_graph.save_to_supabase, supabase_client, project_id
-            )
-
         stats = knowledge_graph.get_stats()
         status.graph_nodes = stats.get("total_nodes", 0)
         status.graph_edges = stats.get("total_edges", 0)
         status.graph_status = "completed"
 
         logger.info(
-            "Phase 4 complete: knowledge graph has %d nodes, %d edges",
+            "Knowledge graph built: %d nodes, %d edges",
             status.graph_nodes,
             status.graph_edges,
         )
 
     except Exception as exc:
-        logger.error("Phase 4 failed: %s", exc)
+        logger.error("Knowledge graph failed: %s", exc)
         status.graph_status = "failed"
         status.errors.append(f"knowledge graph error: {exc}")
 
@@ -667,107 +579,66 @@ async def _index_project(
     embedding_service: NIMEmbeddingService,
     vector_service,
     jobs: dict[str, IndexStatus],
-    supabase_client=None,
-    decision_extractor=None,
-    decision_service=None,
     knowledge_graph=None,
+    include_extensions: set[str] | None = None,
+    include_directories: list[str] | None = None,
 ) -> None:
     """
-    Run the 4-phase indexing pipeline.
+    Run the 2-phase indexing pipeline.
 
-    Phase 1 (fast):       Code → embeddings → vector store
-    Phase 2 (background): Git blame → expertise mapping
-    Phase 3 (background): Recent commits → decision extraction
-    Phase 4 (background): Rebuild knowledge graph
+    Phase 1 (fast): Code → embeddings → vector store
+    Phase 2:        Rebuild knowledge graph
 
     Progress is written to ``jobs[job_id]`` for polling.
     """
     status = jobs[job_id]
     status.status = JobStatus.RUNNING
+    start_ts = time.time()
 
     try:
-        # ── Phase 1: Code indexing (user sees results within seconds) ──
-        indexed_files = await _phase1_index_code(
+        # ── Phase 1: Code indexing ─────────────────────────────────────
+        await _phase1_index_code(
             project_id=project_id,
             project_path=project_path,
             embedding_service=embedding_service,
             vector_service=vector_service,
             status=status,
+            include_extensions=include_extensions,
+            include_directories=include_directories,
         )
 
-        # Mark as completed — code is now searchable
-        status.status = JobStatus.COMPLETED
-
-        # ── Phase 2 & 3: Background git analysis (concurrent) ──────────
-        # The user can already query the codebase while these are running.
-
-        phase2_result: dict | None = None
-        phase3_decisions: list | None = None
-
-        async def _run_phase2() -> dict | None:
-            nonlocal phase2_result
-            from server.services.git_service import GitService, GitServiceError
-            try:
-                git_svc = GitService(project_path, supabase_client=supabase_client)
-                expertise = await asyncio.to_thread(
-                    git_svc.build_expertise_map, indexed_files
-                )
-                status.expertise_files_mapped = len(expertise)
-                status.expertise_status = "completed"
-                phase2_result = {
-                    fp: [
-                        {"author": e.author, "email": e.email,
-                         "commit_count": e.commit_count}
-                        for e in entries
-                    ]
-                    for fp, entries in expertise.items()
-                }
-                return phase2_result
-            except Exception as exc:
-                logger.warning("Phase 2 error: %s", exc)
-                status.expertise_status = "failed"
-                status.errors.append(f"expertise mapping error: {exc}")
-                return None
-
-        async def _run_phase3() -> list | None:
-            nonlocal phase3_decisions
-            await _phase3_decision_extraction(
-                project_path=project_path,
-                status=status,
-                decision_extractor=decision_extractor,
-                decision_service=decision_service,
-                embedding_service=embedding_service,
-            )
-            return None  # decisions stored in decision_service; pass None to graph
-
-        status.expertise_status = "running"
-
-        await asyncio.gather(
-            _run_phase2(),
-            _run_phase3(),
-            return_exceptions=True,
-        )
-
-        # ── Phase 4: Knowledge Graph ────────────────────────────────────
-        await _phase4_knowledge_graph(
+        # ── Phase 2: Knowledge Graph ────────────────────────────────────
+        await _phase2_knowledge_graph(
             project_path=project_path,
             status=status,
             knowledge_graph=knowledge_graph,
-            expertise_map=phase2_result,
-            decisions=phase3_decisions,
-            supabase_client=supabase_client,
-            project_id=project_id,
         )
 
+        status.status = JobStatus.COMPLETED
+
+        # ── Persist history entry ──────────────────────────────────────
+        elapsed = int(time.time() - start_ts)
+        minutes, seconds = divmod(elapsed, 60)
+        duration_str = f"{minutes}:{seconds:02d}"
+
+        history_entry = IndexHistoryEntry(
+            id=job_id,
+            date=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            files=status.files_processed,
+            chunks=status.chunks_created,
+            nodes=status.graph_nodes,
+            edges=status.graph_edges,
+            status=status.status.value if hasattr(status.status, 'value') else str(status.status),
+            duration=duration_str,
+            project_path=project_path,
+        )
+        _append_history(project_id, history_entry)
+
         logger.info(
-            "Indexing job %s fully completed: %d files, %d chunks, "
-            "expertise=%s, decisions=%s (%d found), graph=%s (%d nodes)",
+            "Indexing job %s fully completed: %d files, %d chunks, graph=%s (%d nodes)",
             job_id,
             status.files_processed,
             status.chunks_created,
-            status.expertise_status,
-            status.decision_status,
-            status.decisions_found,
             status.graph_status,
             status.graph_nodes,
         )
@@ -779,8 +650,120 @@ async def _index_project(
 
 
 # ═════════════════════════════════════════════════════════════════════════
+# Index History (per-project JSON persistence)
+# ═════════════════════════════════════════════════════════════════════════
+
+_HISTORY_DIR = ".codeguardian/index_history"
+
+
+def _history_path(project_id: str) -> Path:
+    return Path(_HISTORY_DIR) / f"{project_id}.json"
+
+
+def _load_history(project_id: str) -> list[dict]:
+    path = _history_path(project_id)
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Corrupt history file for '%s', starting fresh", project_id)
+        return []
+
+
+def _append_history(project_id: str, entry: IndexHistoryEntry) -> None:
+    path = _history_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entries = _load_history(project_id)
+    entries.append(entry.model_dump())
+    # Keep last 20
+    entries = entries[-20:]
+    path.write_text(json.dumps(entries, indent=2, default=str), encoding="utf-8")
+
+
+def _clear_history(project_id: str) -> None:
+    path = _history_path(project_id)
+    if path.exists():
+        path.unlink()
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # Endpoints
 # ═════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/index/estimate/{project_id}", response_model=IndexEstimateResponse)
+async def estimate_index(project_id: str, project_path: str, request: Request) -> IndexEstimateResponse:
+    """
+    Walk the project directory and return file counts, line counts,
+    and estimated chunks grouped by extension and by directory.
+    """
+    root = Path(project_path)
+    if not root.exists() or not root.is_dir():
+        raise HTTPException(404, f"Project path not found: {project_path}")
+
+    ext_data: dict[str, dict] = {}
+    dir_data: dict[str, dict] = {}
+    total_files = 0
+    total_lines = 0
+    total_chunks = 0
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fname in filenames:
+            fp = Path(dirpath) / fname
+            ext = fp.suffix.lower()
+            if not ext:
+                continue
+            try:
+                content = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            line_count = content.count("\n") + 1
+            est_chunks = max(1, math.ceil(line_count / _MAX_CHUNK_LINES))
+
+            # Per extension
+            e = ext_data.setdefault(ext, {"count": 0, "total_lines": 0, "estimated_chunks": 0})
+            e["count"] += 1
+            e["total_lines"] += line_count
+            e["estimated_chunks"] += est_chunks
+
+            # Per directory (top-2-level relative path)
+            rel = str(fp.relative_to(root))
+            parts = rel.split("/")
+            dir_key = parts[0] if len(parts) <= 2 else "/".join(parts[:2])
+            d = dir_data.setdefault(dir_key, {"count": 0, "total_lines": 0, "estimated_chunks": 0})
+            d["count"] += 1
+            d["total_lines"] += line_count
+            d["estimated_chunks"] += est_chunks
+
+            total_files += 1
+            total_lines += line_count
+            total_chunks += est_chunks
+
+    return IndexEstimateResponse(
+        project_id=project_id,
+        project_path=project_path,
+        total_files=total_files,
+        total_lines=total_lines,
+        estimated_total_chunks=total_chunks,
+        by_extension=[ExtensionEstimate(extension=k, **v) for k, v in sorted(ext_data.items())],
+        by_directory=[DirectoryEstimate(path=k, **v) for k, v in sorted(dir_data.items())],
+    )
+
+
+@router.get("/index/history/{project_id}")
+async def get_index_history(project_id: str) -> list[IndexHistoryEntry]:
+    """Return per-project index history entries."""
+    entries = _load_history(project_id)
+    return [IndexHistoryEntry(**e) for e in entries]
+
+
+@router.delete("/index/history/{project_id}")
+async def delete_index_history(project_id: str) -> dict:
+    """Clear per-project index history."""
+    _clear_history(project_id)
+    return {"success": True, "project_id": project_id}
 
 
 @router.post("/index", response_model=IndexResponse)
@@ -790,7 +773,7 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
 
     Returns a ``job_id`` immediately — poll ``/api/index/status/{job_id}``
     for progress. Code becomes searchable within seconds (Phase 1).
-    Expertise mapping and decision extraction continue in the background.
+    The knowledge graph is rebuilt in the background (Phase 2).
     """
     embedding = getattr(request.app.state, "embedding_service", None)
     vector = getattr(request.app.state, "vector_service", None)
@@ -812,11 +795,12 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
     jobs[job_id] = initial_status
     request.app.state.index_jobs = jobs
 
-    # Collect optional services for Phase 2, 3 & 4
-    supabase_client = getattr(request.app.state, "supabase_client", None)
-    decision_extractor = getattr(request.app.state, "decision_extractor", None)
-    decision_service = getattr(request.app.state, "decision_service", None)
+    # Collect optional services for Phase 2
     knowledge_graph = getattr(request.app.state, "knowledge_graph", None)
+
+    # Convert filter lists to sets for fast lookup
+    ext_filter = set(body.include_extensions) if body.include_extensions else None
+    dir_filter = body.include_directories
 
     # Launch background task
     asyncio.create_task(
@@ -828,10 +812,9 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
             embedding_service=embedding,
             vector_service=vector,
             jobs=jobs,
-            supabase_client=supabase_client,
-            decision_extractor=decision_extractor,
-            decision_service=decision_service,
             knowledge_graph=knowledge_graph,
+            include_extensions=ext_filter,
+            include_directories=dir_filter,
         )
     )
 
@@ -847,3 +830,46 @@ async def index_status(job_id: str, request: Request) -> IndexStatus:
         raise HTTPException(404, f"Job not found: {job_id}")
 
     return jobs[job_id]
+
+
+class IndexCheckResponse(BaseModel):
+    project_id: str
+    is_indexed: bool
+    chunks_count: int = 0
+
+
+@router.delete("/index/{project_id}")
+async def delete_index(project_id: str, request: Request) -> dict:
+    """
+    Delete all indexed chunks/embeddings for a project from ChromaDB.
+    """
+    vector = getattr(request.app.state, "vector_service", None)
+    if vector is None:
+        raise HTTPException(503, "Vector service is not initialised.")
+
+    await vector.delete_project(project_id)
+    logger.info("Deleted index for project '%s'", project_id)
+    return {"success": True, "project_id": project_id}
+
+
+@router.get("/index/check/{project_id}", response_model=IndexCheckResponse)
+async def check_index(project_id: str, request: Request) -> IndexCheckResponse:
+    """
+    Check whether a project has already been indexed in ChromaDB.
+
+    Returns:
+        - is_indexed: True if chunks exist in the vector store
+        - chunks_count: Number of chunks stored
+    """
+    vector = getattr(request.app.state, "vector_service", None)
+    if vector is None:
+        raise HTTPException(503, "Vector service is not initialised.")
+
+    is_indexed = vector.has_project_index(project_id)
+    chunks_count = vector.get_project_index_count(project_id) if is_indexed else 0
+
+    return IndexCheckResponse(
+        project_id=project_id,
+        is_indexed=is_indexed,
+        chunks_count=chunks_count,
+    )

@@ -8,7 +8,7 @@ import typer
 from typing import Optional
 
 from cgctl import __version__
-from cgctl.commands import init, config, index, ask, serve, audit, context, impact, review, onboard, health
+from cgctl.commands import init, config, index, ask, serve, audit, context, impact, review, onboard, health, hooks
 from cgctl.state import get_state
 
 # Create the main CLI app
@@ -31,6 +31,7 @@ app.add_typer(impact.app, name="impact")
 app.add_typer(review.app, name="review")
 app.add_typer(onboard.app, name="onboard")
 app.add_typer(health.app, name="health")
+app.add_typer(hooks.app, name="hooks")
 
 
 @app.callback(invoke_without_command=True)

@@ -4,14 +4,14 @@ import {
   FileText,
   GitBranch,
   Activity,
-  Users,
+  Network,
   AlertTriangle,
   TrendingUp,
 } from "lucide-react";
 import { useProjectContext } from "../App";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
-import { analyzeStructure } from "../lib/api";
-import type { StructureResponse } from "../lib/types";
+import { getDashboardMetrics } from "../lib/api";
+import type { DashboardResponse, DashboardHotspot } from "../lib/types";
 
 interface MetricCardProps {
   icon: React.ReactNode;
@@ -39,24 +39,24 @@ function MetricCard({ icon, label, value, color, onClick }: MetricCardProps) {
 export default function Dashboard() {
   const { projectPath, projectName, indexStatus } = useProjectContext();
   const navigate = useNavigate();
-  const [structure, setStructure] = useState<StructureResponse | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!projectPath) return;
 
-    const loadStructure = async () => {
+    const loadDashboard = async () => {
       try {
-        const result = await analyzeStructure(projectPath);
-        setStructure(result);
+        const result = await getDashboardMetrics(projectPath);
+        setDashboardData(result);
       } catch (error) {
-        console.error("Failed to analyze structure:", error);
+        console.error("Failed to load dashboard metrics:", error);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadStructure();
+    loadDashboard();
   }, [projectPath]);
 
   if (isLoading) {
@@ -67,11 +67,12 @@ export default function Dashboard() {
     );
   }
 
-  const isIndexing = indexStatus?.status === "running";
-  const filesIndexed = indexStatus?.files_processed || structure?.total_files || 0;
-  const decisionsCount = indexStatus?.decisions_found || 0;
-  const avgHealth = structure?.score ? structure.score / 10 : 0;
-  const expertsCount = indexStatus?.expertise_files_mapped || 0;
+  const isIndexing = dashboardData?.is_indexing || indexStatus?.status === "running";
+  const filesIndexed = dashboardData?.files_indexed ?? indexStatus?.files_processed ?? 0;
+  const graphNodes = dashboardData?.graph_nodes ?? 0;
+  const avgHealth = dashboardData?.avg_health_score ?? 0;
+  const graphEdges = dashboardData?.graph_edges ?? 0;
+  const hotspots = dashboardData?.hotspots ?? [];
 
   return (
     <div className="flex flex-col h-full">
@@ -87,15 +88,15 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           icon={<FileText className="w-5 h-5" />}
-          label="Files Indexed"
+          label="Total Files"
           value={filesIndexed}
           color="text-accent-blue"
           onClick={() => navigate("/files")}
         />
         <MetricCard
-          icon={<GitBranch className="w-5 h-5" />}
-          label="Decisions Captured"
-          value={decisionsCount}
+          icon={<Network className="w-5 h-5" />}
+          label="Graph Nodes"
+          value={graphNodes}
           color="text-accent-violet"
           onClick={() => navigate("/graph")}
         />
@@ -107,11 +108,11 @@ export default function Dashboard() {
           onClick={() => navigate("/graph")}
         />
         <MetricCard
-          icon={<Users className="w-5 h-5" />}
-          label="Experts Mapped"
-          value={expertsCount}
+          icon={<GitBranch className="w-5 h-5" />}
+          label="Graph Edges"
+          value={graphEdges}
           color="text-accent-cyan"
-          onClick={() => navigate("/files")}
+          onClick={() => navigate("/graph")}
         />
       </div>
 
@@ -123,13 +124,7 @@ export default function Dashboard() {
           </h2>
           <div className="space-y-3">
             <div className="text-center py-8 text-text-muted">
-              <p className="text-sm">No recent questions</p>
-              <button
-                onClick={() => navigate("/ask")}
-                className="text-accent-blue hover:underline text-sm mt-2"
-              >
-                Ask a question →
-              </button>
+              <p className="text-sm">CG-pilot conversations will appear here</p>
             </div>
           </div>
         </div>
@@ -140,15 +135,33 @@ export default function Dashboard() {
             Top Hotspots
           </h2>
           <div className="space-y-3">
-            <div className="text-center py-8 text-text-muted">
-              <p className="text-sm">No hotspots detected</p>
-              <button
-                onClick={() => navigate("/files")}
-                className="text-accent-blue hover:underline text-sm mt-2"
-              >
-                Explore files →
-              </button>
-            </div>
+            {hotspots.length === 0 ? (
+              <div className="text-center py-8 text-text-muted">
+                <p className="text-sm">No hotspots detected</p>
+                <button
+                  onClick={() => navigate("/files")}
+                  className="text-accent-blue hover:underline text-sm mt-2"
+                >
+                  Explore files →
+                </button>
+              </div>
+            ) : (
+              hotspots.map((hotspot: DashboardHotspot, index: number) => (
+                <div key={index} className="flex items-center justify-between p-3 bg-bg-primary rounded-lg border border-border">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-text-primary truncate">
+                      {hotspot.file_path}
+                    </p>
+                    <p className="text-xs text-text-muted mt-1">{hotspot.reason}</p>
+                  </div>
+                  <div className="ml-3 flex items-center gap-2">
+                    <span className="text-xs font-medium text-accent-red">
+                      {Math.round(hotspot.health_score * 100)}%
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>

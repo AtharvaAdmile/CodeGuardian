@@ -573,74 +573,54 @@ async def _review_code(
     file_path: str | None,
     diff: str | None,
 ) -> str:
-    """Call /api/review and format the ReviewReport as markdown."""
+    """Call /api/review/status and format the commit review as markdown."""
+    _ = (project_id, code, file_path, diff)
     payload: dict[str, Any] = {
-        "project_id": project_id,
         "project_path": project_path,
+        "history_limit": 10,
     }
-    if code:
-        payload["code"] = code
-    if file_path:
-        payload["file_path"] = file_path
-    if diff:
-        payload["diff"] = diff
 
-    data = await _post("/api/review", payload)
+    data = await _post("/api/review/status", payload)
 
     if data.get("error"):
         return f"**Error:** {data['error']}"
 
-    lines: list[str] = []
+    recommendation = data.get("recommendation", {})
+    lines: list[str] = [
+        "## Commit Review",
+        "",
+        data.get("summary", "").strip(),
+        "",
+        f"**Recommendation:** {recommendation.get('title', '')}",
+        recommendation.get("reason", ""),
+    ]
 
-    summary = data.get("summary", "").strip()
-    if summary:
-        lines.append(f"## Code Review\n\n{summary}\n")
+    concerns = recommendation.get("concerns", [])
+    if concerns:
+        lines.append("\n### Concerns")
+        for concern in concerns:
+            lines.append(f"- {concern}")
 
-    counts = data.get("severity_counts", {})
-    if any(counts.values()):
-        parts = " | ".join(
-            f"**{k.capitalize()}:** {v}"
-            for k, v in counts.items()
-            if v > 0
-        )
-        lines.append(f"**Severity summary:** {parts}\n")
+    files = data.get("uncommitted_files", [])
+    if files:
+        lines.append("\n### Uncommitted Files")
+        for item in files[:20]:
+            scope = "untracked" if item.get("untracked") else "staged" if item.get("staged") else "unstaged"
+            if item.get("staged") and item.get("unstaged"):
+                scope = "staged + unstaged"
+            lines.append(
+                f"- `{item.get('file_path', '')}` ({scope}, {item.get('status', '')}, "
+                f"+{item.get('additions', 0)}/-{item.get('deletions', 0)})"
+            )
 
-    findings = data.get("findings", [])
-    if findings:
-        lines.append("### Findings\n")
-        for i, f in enumerate(findings, 1):
-            sev = f.get("severity", "low").upper()
-            cat = f.get("category", "")
-            msg = f.get("message", "")
-            fp = f.get("file_path", "")
-            lineno = f.get("line")
-            suggestion = f.get("suggestion", "")
-            conf = f.get("confidence", 0.0)
-
-            loc = fp
-            if lineno:
-                loc += f":{lineno}"
-
-            lines.append(f"#### {i}. [{sev}] {msg}")
-            if loc and loc != ":":
-                lines.append(f"- **Location:** `{loc}`")
-            if cat:
-                lines.append(f"- **Category:** {cat}")
-            if suggestion:
-                lines.append(f"- **Fix:** {suggestion}")
-            lines.append(f"- **Confidence:** {conf:.0%}\n")
-    else:
-        lines.append("\n✅ No issues found.")
-
-    impact = data.get("impact_report", {})
-    if impact and not impact.get("error") and impact.get("total_affected", 0):
-        total = impact["total_affected"]
-        lines.append(f"\n### Impact\n**{total} file(s) affected** by this change.")
-        high = impact.get("high_risk", [])
-        if high:
-            lines.append("**High-risk dependents:**")
-            for f in high[:3]:
-                lines.append(f"- `{f['file_path']}` (risk={f['risk_score']:.2f})")
+    history = data.get("recent_commits", [])
+    if history:
+        lines.append("\n### Recent Commits")
+        for item in history[:10]:
+            lines.append(
+                f"- `{item.get('short_sha', '')}` {item.get('message', '')} "
+                f"({len(item.get('files', []))} files, +{item.get('insertions', 0)}/-{item.get('deletions', 0)})"
+            )
 
     return "\n".join(lines)
 
@@ -654,56 +634,13 @@ async def _check_compliance(
     file_path: str | None,
 ) -> str:
     """
-    Run /api/review focused on security and compliance findings only.
-    Filters the full review to security + complexity categories.
+    Legacy compatibility shim.
     """
-    payload: dict[str, Any] = {
-        "project_id": project_id,
-        "project_path": project_path,
-        "code": code,
-    }
-    if file_path:
-        payload["file_path"] = file_path
-
-    data = await _post("/api/review", payload)
-
-    if data.get("error"):
-        return f"**Error:** {data['error']}"
-
-    # Filter to security + complexity only
-    findings = [
-        f for f in data.get("findings", [])
-        if f.get("category") in {"security", "complexity"}
-    ]
-
-    if not findings:
-        return "✅ No security or compliance issues detected."
-
-    lines: list[str] = ["## Compliance & Security Scan\n"]
-
-    critical_high = [f for f in findings if f.get("severity") in {"critical", "high"}]
-    if critical_high:
-        lines.append(f"⚠️  **{len(critical_high)} critical/high severity issue(s) found.**\n")
-
-    for i, f in enumerate(findings, 1):
-        sev = f.get("severity", "low").upper()
-        msg = f.get("message", "")
-        fp = f.get("file_path", "")
-        lineno = f.get("line")
-        suggestion = f.get("suggestion", "")
-
-        loc = fp
-        if lineno:
-            loc += f":{lineno}"
-
-        lines.append(f"### {i}. [{sev}] {msg}")
-        if loc and loc != ":":
-            lines.append(f"- **Location:** `{loc}`")
-        if suggestion:
-            lines.append(f"- **Remediation:** {suggestion}")
-        lines.append("")
-
-    return "\n".join(lines)
+    _ = (project_id, project_path, code, file_path)
+    return (
+        "The legacy code compliance scan has been retired. "
+        "Use `review_code` for commit review of the current git working tree."
+    )
 
 
 # ── Tool registry ────────────────────────────────────────────────────────
@@ -857,19 +794,17 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="review_code",
             description=(
-                "Run a multi-stage code review on a snippet or PR diff. "
-                "Checks security vulnerabilities (hardcoded secrets, SQL injection, "
-                "path traversal, PII logging), code patterns (error handling, naming, "
-                "logging consistency vs similar functions), cyclomatic complexity, "
-                "and blast-radius impact. Returns ranked findings with suggested fixes."
+                "Review the current git working tree and recent commit history. "
+                "Shows staged, unstaged, and untracked files, summarizes the affected "
+                "files, and recommends whether the current changes should be committed."
             ),
             inputSchema={
                 "type": "object",
-                "required": ["project_id", "project_path"],
+                "required": ["project_path"],
                 "properties": {
                     "project_id": {
                         "type": "string",
-                        "description": "Project identifier (must be indexed).",
+                        "description": "Optional project identifier.",
                     },
                     "project_path": {
                         "type": "string",
@@ -877,15 +812,15 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "code": {
                         "type": "string",
-                        "description": "Code snippet to review (snippet mode).",
+                        "description": "Deprecated; ignored by commit review.",
                     },
                     "file_path": {
                         "type": "string",
-                        "description": "File path relative to project root (PR mode).",
+                        "description": "Deprecated; ignored by commit review.",
                     },
                     "diff": {
                         "type": "string",
-                        "description": "Unified diff of changes (PR mode).",
+                        "description": "Deprecated; ignored by commit review.",
                     },
                 },
             },
@@ -893,10 +828,8 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="check_compliance",
             description=(
-                "Security and compliance scan of a code snippet. "
-                "Checks for hardcoded secrets, SQL injection, path traversal, "
-                "PII in logs, and high cyclomatic complexity. "
-                "Returns only security/compliance findings (no pattern or impact data)."
+                "Deprecated compatibility tool. The old code compliance scan "
+                "has been retired in favor of commit review."
             ),
             inputSchema={
                 "type": "object",

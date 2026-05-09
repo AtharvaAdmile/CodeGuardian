@@ -5,13 +5,11 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { TopBar } from "./components/layout/TopBar";
 import { CommandPalette } from "./components/layout/CommandPalette";
 import { LoadingSpinner } from "./components/shared/LoadingSpinner";
+import { CGPilot } from "./components/CGPilot";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
-const QnA = lazy(() => import("./pages/QnA"));
 const KnowledgeGraph = lazy(() => import("./pages/KnowledgeGraph"));
-const ImpactAnalyzer = lazy(() => import("./pages/ImpactAnalyzer"));
-const Onboarding = lazy(() => import("./pages/Onboarding"));
-const CodeReview = lazy(() => import("./pages/CodeReview"));
+const CommitReview = lazy(() => import("./pages/CommitReview"));
 const FileExplorer = lazy(() => import("./pages/FileExplorer"));
 const Indexing = lazy(() => import("./pages/Indexing"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -141,11 +139,9 @@ function AppContent() {
               <Suspense fallback={<LoadingPage />}>
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
-                  <Route path="/ask" element={<QnA />} />
                   <Route path="/graph" element={<KnowledgeGraph />} />
-                  <Route path="/impact" element={<ImpactAnalyzer />} />
-                  <Route path="/onboard" element={<Onboarding />} />
-                  <Route path="/review" element={<CodeReview />} />
+                  <Route path="/impact" element={<Navigate to="/files" replace />} />
+                  <Route path="/review" element={<CommitReview />} />
                   <Route path="/files" element={<FileExplorer />} />
                   <Route path="/indexing" element={<Indexing />} />
                   <Route path="/settings" element={<Settings />} />
@@ -158,6 +154,13 @@ function AppContent() {
             isOpen={isCommandPaletteOpen}
             onClose={() => setIsCommandPaletteOpen(false)}
           />
+          {projectName && projectPath && (
+            <CGPilot
+              projectId={projectName}
+              projectPath={projectPath}
+              indexStatus={indexStatus?.status}
+            />
+          )}
         </div>
       </ProjectContext.Provider>
     </BrowserRouter>

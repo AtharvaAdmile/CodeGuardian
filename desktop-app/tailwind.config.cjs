@@ -39,6 +39,8 @@ module.exports = {
         'blink': 'blink 1s step-end infinite',
         'fade-in': 'fadeIn 0.2s ease-out',
         'slide-in': 'slideIn 0.3s ease-out',
+        'shimmer': 'shimmer 2s infinite linear',
+        'pulseFast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
       keyframes: {
         blink: {
@@ -52,6 +54,10 @@ module.exports = {
         slideIn: {
           '0%': { transform: 'translateX(-10px)', opacity: '0' },
           '100%': { transform: 'translateX(0)', opacity: '1' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '200% 0' },
+          '100%': { backgroundPosition: '-200% 0' }
         },
       },
     },

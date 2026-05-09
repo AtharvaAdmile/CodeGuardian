@@ -35,9 +35,9 @@ Everything runs through a central **FastAPI hub on port 8742**. The CLI, the Ele
 
 - **Semantic Q&A** — Ask natural-language questions; get answers grounded in code chunks, architectural decisions, and author expertise
 - **Knowledge Graph** — NetworkX `DiGraph` linking files, functions, decisions, authors, and modules; rebuilt on every index
-- **Impact Analysis** — Blast-radius report for any changed file: transitive dependents, risk scores, suggested reviewers
+- **Impact Analysis** — File Explorer sidebar action that persists LLM-synthesized blast-radius reports per file
 - **Decision Extraction** — LLM parses the last 50 commits to extract and store architectural decisions
-- **Code Review** — Multi-stage LangGraph agent: security scan, complexity via `radon`, pattern check, impact summary
+- **Commit Review** — Git history and working-tree review: changed files, diffs, commit readiness, and one-click commit flow
 - **Onboarding Paths** — LangGraph agent converts a plain-text task description into an ordered learning path
 - **Expertise Map** — `git blame` + commit analysis to identify who knows each file best
 - **MCP Integration** — Exposes 9 tools to any MCP-compatible AI assistant (Claude Code, etc.)
@@ -124,13 +124,12 @@ CG_2/
 │   ├── electron/main.ts           # Electron main process
 │   └── src/
 │       ├── App.tsx                # Router + ProjectContext
-│       ├── pages/                 # 9 full-page views
+│       ├── pages/                 # Full-page views
 │       │   ├── Dashboard.tsx
 │       │   ├── QnA.tsx
 │       │   ├── KnowledgeGraph.tsx
-│       │   ├── ImpactAnalyzer.tsx
 │       │   ├── Onboarding.tsx
-│       │   ├── CodeReview.tsx
+│       │   ├── CommitReview.tsx
 │       │   ├── FileExplorer.tsx
 │       │   ├── Indexing.tsx
 │       │   └── Settings.tsx
@@ -339,10 +338,10 @@ npm run typecheck    # TypeScript type check
 | `/` | Dashboard | Project overview, health status, recent activity |
 | `/ask` | Q&A | Natural-language query interface with source citations |
 | `/graph` | Knowledge Graph | D3.js interactive graph of files, functions, decisions, authors |
-| `/impact` | Impact Analyzer | Blast-radius visualiser for file changes |
+| `/impact` | Redirect | Opens File Explorer, where impact analysis lives in the file context sidebar |
 | `/onboard` | Onboarding | Learning path generator for new tasks |
-| `/review` | Code Review | Multi-stage review with security and complexity findings |
-| `/files` | File Explorer | Browse indexed files and their context |
+| `/review` | Commit Review | Git history, current changes, commit summary, and commit action |
+| `/files` | File Explorer | Browse indexed files, file context, and persisted impact analysis |
 | `/indexing` | Indexing | Kick off and monitor index jobs |
 | `/settings` | Settings | Server URL, project configuration |
 

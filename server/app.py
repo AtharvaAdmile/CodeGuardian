@@ -102,34 +102,18 @@ async def lifespan(app: FastAPI):
 
     app.state.embedding_service = embedding_service
 
-    # ── Vector Service (ChromaDB + optional Supabase) ───────────────
+    # ── Vector Service (ChromaDB only) ──────────────────────────────
     from server.services.vector_service import VectorService
-
-    supabase_client = None
-    if settings.supabase_url and settings.supabase_key:
-        try:
-            from supabase import create_client
-
-            supabase_client = create_client(
-                settings.supabase_url, settings.supabase_key
-            )
-            logger.info("✅ Supabase client connected")
-        except Exception as exc:
-            logger.warning(
-                "⚠️  Supabase init failed (non-fatal): %s", exc
-            )
 
     vector_service = VectorService(
         chromadb_dir=settings.chromadb_persist_dir,
-        supabase_client=supabase_client,
     )
     app.state.vector_service = vector_service
-    app.state.supabase_client = supabase_client
 
     # ── Decision Service ────────────────────────────────────────────
     from server.services.decision_service import DecisionService
 
-    decision_service = DecisionService(supabase_client=supabase_client)
+    decision_service = DecisionService(supabase_client=None)
     app.state.decision_service = decision_service
 
     # ── Git Service ─────────────────────────────────────────────────────
@@ -163,6 +147,63 @@ async def lifespan(app: FastAPI):
         logger.info("ℹ️  Knowledge graph empty — will be populated on first index")
 
     app.state.knowledge_graph = knowledge_graph
+
+    # ── Context Service (NEW) ─────────────────────────────────────────────
+    from server.services.context_service import ContextService
+
+    context_service: ContextService | None = None
+    if settings.context_yaml_enabled and llm_client is not None:
+        context_service = ContextService(
+            llm_client=llm_client,
+            git_service=None,
+            context_filename=settings.context_yaml_filename,
+        )
+        logger.info(
+            "✅ ContextService initialised (filename: %s)",
+            settings.context_yaml_filename,
+        )
+    else:
+        logger.info("ℹ️  ContextService disabled (context_yaml_enabled=False)")
+
+    app.state.context_service = context_service
+
+    # ── Retrieval Service (NEW) ──────────────────────────────────────────
+    from server.services.retrieval_service import RetrievalService
+
+    retrieval_service: RetrievalService | None = None
+    if context_service is not None:
+        retrieval_service = RetrievalService(
+            context_service=context_service,
+            max_contexts=settings.retrieval_max_contexts,
+            max_snippets=settings.retrieval_max_snippets,
+        )
+        logger.info("✅ RetrievalService initialised")
+
+    app.state.retrieval_service = retrieval_service
+
+    # ── CG-pilot (OpenAI SDK over NVIDIA NIM-compatible endpoint) ───────
+    from server.services.cg_pilot_service import CGPilotService
+
+    cg_pilot_service: CGPilotService | None = None
+    if settings.nvidia_nim_api_key and embedding_service is not None:
+        cg_pilot_service = CGPilotService(
+            api_key=settings.nvidia_nim_api_key,
+            base_url=settings.nvidia_nim_base_url,
+            model=settings.nvidia_llm_model,
+            embedding_service=embedding_service,
+            vector_service=vector_service,
+            max_tool_rounds=settings.cgpilot_max_tool_rounds,
+        )
+        logger.info(
+            "✅ CG-pilot initialised via OpenAI SDK (NIM model: %s)",
+            settings.nvidia_llm_model,
+        )
+    elif not settings.nvidia_nim_api_key:
+        logger.info("ℹ️  CG-pilot disabled (NVIDIA_NIM_API_KEY not set)")
+    else:
+        logger.info("ℹ️  CG-pilot disabled (embedding service unavailable)")
+
+    app.state.cg_pilot_service = cg_pilot_service
 
     # ── Indexing Job Tracker ────────────────────────────────────────────
     app.state.index_jobs = {}
@@ -199,6 +240,11 @@ async def lifespan(app: FastAPI):
         await app.state.vector_service.close()
         logger.info("   Vector service closed")
 
+    # Close CG-pilot service
+    if getattr(app.state, "cg_pilot_service", None) is not None:
+        await app.state.cg_pilot_service.close()
+        logger.info("   CG-pilot service closed")
+
     logger.info("👋 Shutdown complete")
 
 
@@ -225,11 +271,14 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:5173",   # Vite dev server
             "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://localhost:3000",
         ],
         allow_origin_regex=r"http://localhost:\d+",  # Any localhost port
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     # ── Register Routers ────────────────────────────────────────────
@@ -241,6 +290,9 @@ def create_app() -> FastAPI:
     from server.routes.impact import router as impact_router
     from server.routes.onboarding import router as onboarding_router
     from server.routes.review import router as review_router
+    from server.routes.context import router as context_router
+    from server.routes.cg_pilot import router as cg_pilot_router
+    from server.routes.dashboard import router as dashboard_router
 
     app.include_router(health_router)
     app.include_router(query_router)
@@ -250,6 +302,9 @@ def create_app() -> FastAPI:
     app.include_router(impact_router)
     app.include_router(onboarding_router)
     app.include_router(review_router)
+    app.include_router(context_router)
+    app.include_router(cg_pilot_router)
+    app.include_router(dashboard_router)
 
     return app
 

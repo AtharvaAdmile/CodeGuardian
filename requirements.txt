@@ -15,6 +15,7 @@ chromadb>=0.5.0
 
 # HTTP & Async
 httpx>=0.25.0
+openai>=2.0.0
 
 # Configuration
 python-dotenv>=1.0.0

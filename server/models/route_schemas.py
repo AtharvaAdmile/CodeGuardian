@@ -82,6 +82,47 @@ class AskResponse(BaseModel):
     )
 
 
+class CGPilotMessage(BaseModel):
+    """A compact chat history item for CG-pilot."""
+
+    role: str = Field(..., description="user or assistant")
+    content: str = Field(..., min_length=1)
+
+
+class CGPilotRequest(BaseModel):
+    """POST /api/cg-pilot/chat"""
+
+    project_id: str = Field(..., description="Project identifier.")
+    project_path: str = Field(..., description="Absolute path to the project root.")
+    message: str = Field(..., min_length=1)
+    conversation_history: list[CGPilotMessage] = Field(default_factory=list)
+
+
+class CGPilotToolUse(BaseModel):
+    """A tool call made while answering a CG-pilot message."""
+
+    name: str
+    summary: str = ""
+
+
+class CGPilotResponse(BaseModel):
+    """Response from POST /api/cg-pilot/chat."""
+
+    answer: str
+    sources: list[SourceRef] = Field(default_factory=list)
+    tools_used: list[CGPilotToolUse] = Field(default_factory=list)
+    indexed: bool = True
+
+
+class CGPilotStatusResponse(BaseModel):
+    """GET /api/cg-pilot/status/{project_id}."""
+
+    project_id: str
+    indexed: bool
+    ready: bool
+    reason: str | None = None
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # Analysis Routes
 # ═════════════════════════════════════════════════════════════════════════
@@ -163,6 +204,12 @@ class IndexRequest(BaseModel):
     force: bool = Field(
         False, description="Re-index even if project was already indexed."
     )
+    include_extensions: list[str] | None = Field(
+        None, description="Only index files with these extensions."
+    )
+    include_directories: list[str] | None = Field(
+        None, description="Only index files under these relative directory paths."
+    )
 
 
 class IndexResponse(BaseModel):
@@ -183,32 +230,18 @@ class JobStatus(str, Enum):
 
 
 class IndexStatus(BaseModel):
-    """GET /api/index/status/{job_id} — tracks 3-phase progress."""
+    """GET /api/index/status/{job_id} — tracks 2-phase progress."""
 
     job_id: str
     status: JobStatus = JobStatus.QUEUED
 
-    # ── Phase 1: Code indexing (fast) ────────────────────────────────
+    # ── Phase 1: Code indexing ──────────────────────────────────────
     files_processed: int = 0
     files_total: int = 0
     chunks_created: int = 0
+    current_file: str | None = None
 
-    # ── Phase 2: Expertise mapping (background) ─────────────────────
-    expertise_status: str = Field(
-        "pending",
-        description="One of: pending, running, completed, failed, skipped",
-    )
-    expertise_files_mapped: int = 0
-
-    # ── Phase 3: Decision extraction (background) ───────────────────
-    decision_status: str = Field(
-        "pending",
-        description="One of: pending, running, completed, failed, skipped",
-    )
-    decisions_commits_processed: int = 0
-    decisions_found: int = 0
-
-    # ── Phase 4: Knowledge graph build (background) ─────────────────
+    # ── Phase 2: Knowledge graph build ──────────────────────────────
     graph_status: str = Field(
         "pending",
         description="One of: pending, running, completed, failed, skipped",
@@ -219,6 +252,50 @@ class IndexStatus(BaseModel):
     # ── Errors ──────────────────────────────────────────────────────
     errors: list[str] = Field(default_factory=list)
     error_message: str | None = None
+
+
+class IndexHistoryEntry(BaseModel):
+    """A single completed indexing run."""
+
+    id: str
+    date: str
+    files: int
+    chunks: int
+    nodes: int
+    edges: int
+    status: str
+    duration: str
+    project_path: str
+
+
+class ExtensionEstimate(BaseModel):
+    """Files grouped by extension."""
+
+    extension: str
+    count: int
+    total_lines: int
+    estimated_chunks: int
+
+
+class DirectoryEstimate(BaseModel):
+    """Files grouped by directory."""
+
+    path: str
+    count: int
+    total_lines: int
+    estimated_chunks: int
+
+
+class IndexEstimateResponse(BaseModel):
+    """GET /api/index/estimate/{project_id}"""
+
+    project_id: str
+    project_path: str
+    total_files: int
+    total_lines: int
+    estimated_total_chunks: int
+    by_extension: list[ExtensionEstimate] = Field(default_factory=list)
+    by_directory: list[DirectoryEstimate] = Field(default_factory=list)
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -427,7 +504,7 @@ class RunGeneratedTestResponse(BaseModel):
 
 
 class ImpactAnalyzeRequest(BaseModel):
-    """POST /api/impact/analyze"""
+    """POST /api/impact/analyze and POST /api/impact/saved"""
 
     project_path: str = Field(..., description="Absolute path to the project root.")
     file_path: str = Field(
@@ -453,7 +530,7 @@ class AffectedFileSchema(BaseModel):
 
 
 class ImpactAnalyzeResponse(BaseModel):
-    """Response from POST /api/impact/analyze (BlastRadiusReport)."""
+    """Response from POST /api/impact/analyze."""
 
     changed_file: str
     total_affected: int = 0
@@ -462,6 +539,13 @@ class ImpactAnalyzeResponse(BaseModel):
     low_risk: list[AffectedFileSchema] = Field(default_factory=list)
     affected_modules: list[str] = Field(default_factory=list)
     suggested_reviewers: list[str] = Field(default_factory=list)
+    agent_summary: str = ""
+    risk_assessment: str = ""
+    recommendations: list[str] = Field(default_factory=list)
+    validation_steps: list[str] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    generated_at: str = ""
+    persisted: bool = False
     error: str | None = None
 
 
@@ -531,37 +615,86 @@ class OnboardingResponse(BaseModel):
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Review Routes
+# Commit Review Routes
 # ═════════════════════════════════════════════════════════════════════════
 
 
-class ReviewRequest(BaseModel):
-    """POST /api/review"""
+class CommitReviewRequest(BaseModel):
+    """POST /api/review/status"""
 
-    project_id: str
-    project_path: str = Field("", description="Absolute path to project root (needed for impact analysis).")
-    code: str | None = Field(None, description="Code snippet to review.")
-    file_path: str | None = Field(None, description="File path (PR mode).")
-    diff: str | None = Field(None, description="Unified diff (PR mode).")
+    project_path: str = Field(..., description="Absolute path to project root.")
+    history_limit: int = Field(10, ge=1, le=50)
 
 
-class FindingSchema(BaseModel):
-    """A single review finding."""
+class CommitRequest(BaseModel):
+    """POST /api/review/commit"""
 
-    severity: str = Field(..., description="critical | high | medium | low")
-    category: str = Field(..., description="security | pattern | complexity | impact")
+    project_path: str = Field(..., description="Absolute path to project root.")
     message: str
+    history_limit: int = Field(10, ge=1, le=50)
+
+
+class CommitFileChangeSchema(BaseModel):
+    """A changed file in either git history or the working tree."""
+
     file_path: str = ""
-    line: int | None = None
-    suggestion: str = ""
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    status: str = ""
+    additions: int = 0
+    deletions: int = 0
+    staged: bool = False
+    unstaged: bool = False
+    untracked: bool = False
+    diff: str = ""
 
 
-class ReviewResponse(BaseModel):
-    """Response from POST /api/review."""
+class CommitHistoryEntrySchema(BaseModel):
+    """A recent commit and the files it changed."""
 
+    sha: str
+    short_sha: str
+    message: str
+    author: str
+    email: str = ""
+    date: str
+    files: list[CommitFileChangeSchema] = Field(default_factory=list)
+    insertions: int = 0
+    deletions: int = 0
+    diff: str = ""
+
+
+class CommitRecommendationSchema(BaseModel):
+    """Commit readiness recommendation for the current working tree."""
+
+    should_commit: bool = False
+    title: str = ""
+    reason: str = ""
+    concerns: list[str] = Field(default_factory=list)
+    suggested_message: str = ""
+
+
+class CommitReviewResponse(BaseModel):
+    """Response from POST /api/review/status."""
+
+    project_path: str = ""
+    branch: str = ""
+    head_sha: str = ""
+    is_git_repo: bool = False
+    has_changes: bool = False
+    staged_files: int = 0
+    unstaged_files: int = 0
+    untracked_files: int = 0
+    uncommitted_files: list[CommitFileChangeSchema] = Field(default_factory=list)
+    recent_commits: list[CommitHistoryEntrySchema] = Field(default_factory=list)
     summary: str = ""
-    findings: list[FindingSchema] = Field(default_factory=list)
-    severity_counts: dict[str, int] = Field(default_factory=dict)
-    impact_report: dict[str, Any] = Field(default_factory=dict)
+    recommendation: CommitRecommendationSchema = Field(default_factory=CommitRecommendationSchema)
+    error: str | None = None
+
+
+class CommitActionResponse(BaseModel):
+    """Response from POST /api/review/commit."""
+
+    committed: bool = False
+    commit_sha: str = ""
+    message: str = ""
+    status: CommitReviewResponse | None = None
     error: str | None = None

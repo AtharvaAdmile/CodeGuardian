@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CodeGuardian Indexing Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            app: {
+              bg: '#0B1120',
+              sidebar: '#111827',
+              card: '#1F2937',
+              text: '#9CA3AF',
+              textBright: '#F3F4F6',
+              accent: '#3B82F6',
+              success: '#10B981',
+              danger: '#EF4444',
+              warning: '#F59E0B'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
+          },
+          animation: {
+            shimmer: 'shimmer 2s infinite linear',
+            pulseFast: 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          },
+          keyframes: {
+            shimmer: {
+              '0%': { backgroundPosition: '200% 0' },
+              '100%': { backgroundPosition: '-200% 0' }
+            }
+          }
+        }
+      }
+    }
+  </script>
+<style data-purpose="custom-animations">
+    .progress-bar-shimmer {
+      background: linear-gradient(90deg, #3B82F6 0%, #8B5CF6 50%, #3B82F6 100%);
+      background-size: 200% 100%;
+    }
+    
+    .spinner {
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-radius: 50%;
+      border-top-color: #3B82F6;
+      animation: spin 1s ease-in-out infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body class="bg-app-bg text-app-text font-sans antialiased h-screen flex overflow-hidden">
+<!-- BEGIN: Sidebar -->
+<aside class="w-64 bg-app-sidebar border-r border-gray-800 flex flex-col justify-between hidden md:flex">
+<div>
+<div class="h-16 flex items-center px-6 border-b border-gray-800">
+<svg class="w-6 h-6 text-app-accent mr-2" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span class="text-app-textBright font-semibold text-lg tracking-wide">CodeGuardian</span>
+</div>
+<nav class="p-4 space-y-1">
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md hover:bg-gray-800 hover:text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-400 group-hover:text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          Dashboard
+        </a>
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md hover:bg-gray-800 hover:text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-400 group-hover:text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          Knowledge Graph
+        </a>
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md hover:bg-gray-800 hover:text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-400 group-hover:text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          Commit Review
+        </a>
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md hover:bg-gray-800 hover:text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-400 group-hover:text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          File Explorer
+        </a>
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md bg-gray-800 text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          Indexing
+        </a>
+</nav>
+</div>
+<div class="p-4 border-t border-gray-800">
+<a class="flex items-center px-3 py-2 text-sm font-medium rounded-md hover:bg-gray-800 hover:text-white group" href="#">
+<svg class="w-5 h-5 mr-3 text-gray-400 group-hover:text-gray-300" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+        Settings
+      </a>
+</div>
+</aside>
+<!-- END: Sidebar -->
+<!-- BEGIN: Main Content -->
+<main class="flex-1 flex flex-col overflow-hidden relative">
+<!-- Top Header -->
+<header class="h-16 flex items-center justify-between px-6 border-b border-gray-800 bg-app-bg z-10 shrink-0">
+<div class="flex items-center text-sm">
+<span class="text-gray-400">CodeGuardian / KisanSahay</span>
+<span class="mx-2 text-gray-600">&gt;</span>
+<span class="text-app-textBright font-medium">Indexing</span>
+</div>
+<div class="flex items-center space-x-4">
+<button class="text-gray-400 hover:text-white">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+<div class="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center cursor-pointer">
+<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+</header>
+<!-- Scrollable Content Area -->
+<div class="flex-1 overflow-y-auto p-6 space-y-6">
+<!-- Progress Section -->
+<section class="space-y-4">
+<div class="flex justify-between items-end mb-2">
+<div class="flex items-center space-x-2 text-sm text-gray-400">
+<svg class="w-4 h-4 text-gray-500 animate-pulseFast" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>Processing Rate: 4 files/s</span>
+</div>
+</div>
+<div class="relative h-6 bg-gray-800 rounded-full overflow-hidden shadow-inner">
+<div class="absolute top-0 left-0 h-full w-[68%] progress-bar-shimmer animate-shimmer rounded-full"></div>
+</div>
+<div class="flex justify-between items-center text-sm">
+<span class="text-app-textBright font-medium">Overall Progress: 68%</span>
+<span class="text-gray-400">01:45 remaining</span>
+</div>
+</section>
+<!-- Phase Cards Grid -->
+<section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+<!-- Discovery Card -->
+<div class="bg-app-card border border-gray-700 rounded-xl p-4 shadow-sm flex items-center justify-between">
+<div>
+<h3 class="text-sm font-medium text-app-textBright mb-1">File Discovery</h3>
+<div class="text-2xl font-bold text-app-success mb-1">90%</div>
+<p class="text-xs text-gray-500">1500 files</p>
+</div>
+<div class="w-10 h-10 rounded-full bg-app-success/10 flex items-center justify-center border border-app-success/20">
+<svg class="w-5 h-5 text-app-success" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+<!-- Chunking Card -->
+<div class="bg-app-card border border-app-accent/30 rounded-xl p-4 shadow-[0_0_15px_rgba(59,130,246,0.1)] flex items-center justify-between">
+<div>
+<h3 class="text-sm font-medium text-app-textBright mb-1">Chunking</h3>
+<div class="text-2xl font-bold text-app-accent mb-1">75%</div>
+<p class="text-xs text-gray-500">1200 chunks</p>
+</div>
+<div class="w-10 h-10 rounded-full bg-app-accent/10 flex items-center justify-center border border-app-accent/20">
+<svg class="w-5 h-5 text-app-accent animate-pulseFast" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+<!-- Embedding Card -->
+<div class="bg-app-card border border-gray-700 rounded-xl p-4 shadow-sm flex items-center justify-between">
+<div>
+<h3 class="text-sm font-medium text-app-textBright mb-1">Embedding</h3>
+<div class="text-2xl font-bold text-app-accent mb-1">50%</div>
+<p class="text-xs text-gray-500">600 embeddings</p>
+</div>
+<div class="w-10 h-10 rounded-full bg-app-accent/10 flex items-center justify-center border border-app-accent/20">
+<svg class="w-5 h-5 text-app-accent animate-pulseFast" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+<!-- Vector Storage Card -->
+<div class="bg-app-card border border-gray-700 rounded-xl p-4 shadow-sm flex items-center justify-between">
+<div>
+<h3 class="text-sm font-medium text-app-textBright mb-1">Vector Storage</h3>
+<div class="text-2xl font-bold text-app-warning mb-1">20%</div>
+<p class="text-xs text-gray-500">240 vectors</p>
+</div>
+<div class="w-10 h-10 rounded-full bg-app-warning/10 flex items-center justify-center border border-app-warning/20">
+<svg class="w-5 h-5 text-app-warning animate-pulseFast" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+</section>
+<!-- Currently Processing -->
+<section class="bg-app-card border border-gray-700 rounded-xl p-5">
+<h3 class="text-sm font-medium text-app-textBright mb-3">Currently Processing</h3>
+<div class="flex items-center justify-between bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+<code class="text-sm text-gray-300 truncate w-full pr-4 font-mono">/Users/atharvahanumantadmile/Documents/KisanSahay/src/components/Dashboard.tsx</code>
+<div class="w-5 h-5 spinner shrink-0"></div>
+</div>
+</section>
+<!-- Bottom Split Section -->
+<section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<!-- Last 5 Processed Files -->
+<div class="bg-app-card border border-gray-700 rounded-xl p-5 flex flex-col">
+<h3 class="text-sm font-medium text-app-textBright mb-4 border-b border-gray-700 pb-2">Last 5 Processed Files</h3>
+<ul class="space-y-3 flex-1 overflow-y-auto pr-2">
+<li class="flex justify-between items-center text-sm">
+<span class="text-gray-300 truncate font-mono text-xs">.../utils/helpers.ts</span>
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-app-success/10 text-app-success border border-app-success/20">Success</span>
+</li>
+<li class="flex justify-between items-center text-sm">
+<span class="text-gray-300 truncate font-mono text-xs">.../api/client.ts</span>
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-app-success/10 text-app-success border border-app-success/20">Success</span>
+</li>
+<li class="flex justify-between items-center text-sm">
+<span class="text-gray-300 truncate font-mono text-xs">.../styles/global.css</span>
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-app-success/10 text-app-success border border-app-success/20">Success</span>
+</li>
+<li class="flex justify-between items-center text-sm">
+<span class="text-gray-300 truncate font-mono text-xs">.../store/reducers.ts</span>
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-app-danger/10 text-app-danger border border-app-danger/20">Failed - Retry</span>
+</li>
+<li class="flex justify-between items-center text-sm">
+<span class="text-gray-300 truncate font-mono text-xs">.../components/Sidebar.tsx</span>
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-app-success/10 text-app-success border border-app-success/20">Success</span>
+</li>
+</ul>
+</div>
+<!-- Extended Stats -->
+<div class="bg-app-card border border-gray-700 rounded-xl p-5 flex flex-col">
+<h3 class="text-sm font-medium text-app-textBright mb-4 border-b border-gray-700 pb-2">Extended Stats</h3>
+<div class="grid grid-cols-2 gap-y-6 gap-x-4 flex-1">
+<div>
+<p class="text-xs text-gray-500 mb-1">Chunk Size</p>
+<p class="text-lg font-semibold text-app-textBright">512 <span class="text-sm font-normal text-gray-400">tokens</span></p>
+</div>
+<div>
+<p class="text-xs text-gray-500 mb-1">Commits Processed</p>
+<p class="text-lg font-semibold text-app-textBright">120</p>
+</div>
+<div>
+<p class="text-xs text-gray-500 mb-1">Graph Nodes</p>
+<p class="text-lg font-semibold text-app-textBright">450</p>
+</div>
+<div>
+<p class="text-xs text-gray-500 mb-1">Graph Edges</p>
+<p class="text-lg font-semibold text-app-textBright">1200</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Action Buttons -->
+<section class="flex justify-end items-center space-x-4 pt-2">
+<button class="px-4 py-2 bg-app-danger/10 hover:bg-app-danger/20 text-app-danger border border-app-danger/30 rounded-md text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-app-danger/50">
+          Cancel Indexing
+        </button>
+<div class="flex flex-col items-end">
+<button class="px-4 py-2 bg-app-accent hover:bg-blue-600 text-white rounded-md text-sm font-medium flex items-center transition-colors focus:outline-none focus:ring-2 focus:ring-app-accent/50 shadow-lg shadow-app-accent/20">
+<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+            Try Again
+          </button>
+<span class="text-[10px] text-gray-500 mt-1">(Red, for failures)</span>
+</div>
+</section>
+<!-- History Accordion -->
+<section class="bg-app-card border border-gray-700 rounded-xl mt-4">
+<button class="w-full px-5 py-4 flex justify-between items-center focus:outline-none hover:bg-gray-800/50 transition-colors rounded-xl">
+<span class="text-sm font-medium text-app-textBright">Indexing History</span>
+<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+</section>
+</div>
+</main>
+<!-- END: Main Content -->
+</body></html>

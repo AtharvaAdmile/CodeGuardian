@@ -54,7 +54,7 @@ CG_2/
 │   ├── services/
 │   │   ├── llm_client.py       # NIMClient — sole LLM interface (httpx)
 │   │   ├── embedding_service.py# NIMEmbeddingService (1024-dim, nv-embedqa-e5-v5)
-│   │   ├── vector_service.py   # ChromaDB + optional Supabase dual-write
+│   │   ├── vector_service.py   # ChromaDB (local only)
 │   │   ├── knowledge_graph.py  # NetworkX DiGraph builder + JSON persistence
 │   │   ├── decision_service.py # Store/retrieve architectural decisions
 │   │   ├── decision_extractor.py# LLM extracts decisions from git log (last 50 commits)
@@ -62,6 +62,7 @@ CG_2/
 │   │   ├── impact_engine.py    # Blast-radius calculator (KG traversal)
 │   │   ├── context_service.py  # .context.yaml management (NEW)
 │   │   ├── retrieval_service.py# Context-YAML retrieval for QnA (NEW)
+│   │   ├── chat_history_service.py # CG-pilot chat session persistence (NEW)
 │   │   └── cg_pilot_service.py # CG-pilot agent service (OpenAI SDK over NIM)
 │   ├── models/                 # Pydantic + dataclass models
 │   │   ├── context_models.py   # DirectoryContext, FileEntry, etc.
@@ -189,7 +190,7 @@ Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code 
 ### GitService (`server/services/git_service.py`)
 - Wraps GitPython for `git blame`, `git log`, `git diff`.
 - Builds expertise maps: aggregates blame entries per author, sorted by commit count.
-- Persisted to Supabase or local `.codeguardian/expertise/` JSON.
+- Persisted to local `.codeguardian/expertise/` JSON.
 
 ### DecisionExtractor (`server/services/decision_extractor.py`)
 - LLM parses the last 50 commits to extract structured architectural decisions.
@@ -211,6 +212,12 @@ Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code 
 - `retrieve_for_query()`: finds relevant `.context.yaml` files, extracts matching sections.
 - `build_context_prompt()`: formats context for QnA LLM consumption.
 - Keyword extraction with stopword filtering.
+
+### ChatHistoryService (`server/services/chat_history_service.py` — NEW)
+- Persists CG-pilot chat sessions to `.codeguardian/chat_history/{project_id}/{session_id}.json`.
+- `create_session()` / `append_message()` / `get_sessions()` / `get_session()` / `delete_session()` / `get_recent()`.
+- Sessions auto-created on first `/api/cg-pilot/chat` call; subsequent calls pass `session_id` to continue.
+- `get_recent()` feeds the Dashboard "Recent Questions" widget.
 
 ---
 
@@ -275,8 +282,12 @@ All tools are thin HTTP proxies to the FastAPI server — no direct DB/LLM acces
 | POST | `/api/context/search` | Search context files |
 | GET | `/api/context/validate/all` | Validate all context files |
 | GET | `/api/context/files/list` | List all context files |
-| POST | `/api/cg-pilot/chat` | CG-pilot agent chat |
-| GET | `/api/dashboard` | Dashboard aggregated data |
+| POST | `/api/cg-pilot/chat` | CG-pilot agent chat (auto-creates sessions) |
+| GET | `/api/cg-pilot/status/{project_id}` | CG-pilot readiness check |
+| GET | `/api/cg-pilot/history/{project_id}` | List chat sessions for a project |
+| GET | `/api/cg-pilot/history/{project_id}/{session_id}` | Get full session with messages |
+| DELETE | `/api/cg-pilot/history/{project_id}/{session_id}` | Delete a chat session |
+| GET | `/api/dashboard/{project_path}` | Dashboard aggregated data |
 
 ---
 
@@ -387,6 +398,7 @@ LOG_LEVEL=INFO
 | Knowledge graph | `.codeguardian/knowledge_graph.json` |
 | Expertise maps | `.codeguardian/expertise/expertise_map.json` |
 | Architectural decisions | Local `.codeguardian/decisions/` JSON |
+| Chat history (CG-pilot) | `.codeguardian/chat_history/` JSON per session |
 | Context-YAML files | `.context.yaml` in each directory (checked into git) |
 
 ---
@@ -435,3 +447,23 @@ Removed Phase 2 (expertise mapping via `git blame`) and Phase 3 (LLM decision ex
 - **dashboard.py**: Updated docstrings to remove stale metric descriptions.
 
 **Docstring cleanup**: `indexing.py` module header, `_phase1_index_code` return doc, and `start_indexing` endpoint doc all updated from "4-phase" / "expertise + decision extraction" references to the current 2-phase pipeline.
+
+---
+
+### Session: CG-pilot context awareness + chat history + FileTree bugfix
+
+**Context-aware CG-pilot:** The CG-pilot chatbot now accepts an optional `file_context` parameter with a `file_path` relative to the project root. The backend reads the file content from disk and injects it into the LLM context. The desktop app's `ProjectContext` gained `selectedFilePath`/`setSelectedFilePath` state. `FileExplorer` sets this on file select; `CGPilot` reads it and shows a removable file chip above the text input. Users can dismiss the chip per-file without affecting future file selections.
+
+**Chat history persistence:** CG-pilot conversations are now persisted to `.codeguardian/chat_history/{project_id}/{session_id}.json`. The `ChatHistoryService` (new) manages sessions. The `/api/cg-pilot/chat` endpoint auto-creates sessions (with `session_id` returned) or continues existing ones. Three new endpoints: `GET /api/cg-pilot/history/{project_id}` (list), `GET /api/cg-pilot/history/{project_id}/{session_id}` (detail), `DELETE /api/cg-pilot/history/{project_id}/{session_id}`.
+
+**CGPilot component updated:**
+- Chat History button (clock icon) toggles a panel showing all previous sessions with message counts
+- Clicking a session loads its full message history
+- New Chat button (`+`) starts a fresh session
+- Hover-to-reveal delete button on each history entry
+- Dashboard "Recent Questions" section wired up with real data from backend
+- Clicking a recent question dispatches a custom event (`cg-open-session`) that opens CGPilot with that session loaded
+
+**FileTree bugfix:** `FileExplorer.tsx` was passing a flat file list from `window.cgctl.listFiles` to `FileTree`, which expects a nested tree with `children` on directories. Fixed by building a tree via two-pass Map-based parent resolution.
+
+**Backend schemas updated:** `CGPilotRequest` gains `session_id` and `file_context` (optional). `CGPilotResponse` gains `session_id`. New schemas: `FileContextSchema`, `ChatSessionSummary`, `ChatSessionDetail`, `ChatHistoryListResponse`, `DeleteSessionResponse`, `RecentQuestion`.

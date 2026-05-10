@@ -33,6 +33,9 @@ Everything runs through a central **FastAPI hub on port 8742**. The CLI, the Ele
 
 ## Features
 
+- **CG-pilot Chat** — In-app AI assistant with agentic codebase Q&A, multi-turn conversations, and tool use
+- **Chat Persistence** — All CG-pilot conversations saved to `.codeguardian/chat_history/`; browse and continue previous sessions from the chat history panel or Dashboard "Recent Questions" widget
+- **Context-Aware Chat** — When a file is selected in the File Explorer, its path is automatically attached as context in CG-pilot's input; users can dismiss it per-file
 - **Semantic Q&A** — Ask natural-language questions; get answers grounded in code chunks, architectural decisions, and author expertise
 - **Knowledge Graph** — NetworkX `DiGraph` linking files, functions, decisions, authors, and modules; rebuilt on every index
 - **Impact Analysis** — File Explorer sidebar action that persists LLM-synthesized blast-radius reports per file
@@ -53,21 +56,20 @@ All three clients talk exclusively to the FastAPI backend over HTTP. No client t
 cgctl CLI ──────────────┐
 Desktop Electron App ───┼──→  FastAPI server (:8742) ──→ NVIDIA NIM API
 MCP Server (stdio/SSE) ─┘         │
-                                   ├──→ ChromaDB (local, always)
-                                   ├──→ Supabase pgvector (optional)
+                                   ├──→ ChromaDB (local storage)
                                    └──→ .codeguardian/ (JSON persistence)
 ```
 
-### Indexing Pipeline (4 phases)
+### Indexing Pipeline (2 phases)
 
-`POST /api/index` starts a background job. Phase 1 completes fast (code is immediately searchable); Phases 2–4 run concurrently in the background:
+`POST /api/index` starts a background job:
 
 | Phase | Work |
 |-------|------|
-| 1 | Walk files → AST chunk (Python) or regex chunk (JS/TS) → NIM embeddings (batches of 32) → upsert to ChromaDB + Supabase |
-| 2 | `git blame` → expertise map (author → files) |
-| 3 | Last 50 commits → LLM decision extraction → stored in DecisionService |
-| 4 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
+| 1 | Walk files → chunk → NIM embeddings (batches of 32) → upsert to ChromaDB |
+| 2 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
+
+Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code is immediately searchable); Phase 2 (knowledge graph) runs after.
 
 Poll progress at `GET /api/index/status/{job_id}`.
 
@@ -96,12 +98,13 @@ CG_2/
 │   └── services/
 │       ├── llm_client.py          # NIMClient — sole LLM interface
 │       ├── embedding_service.py   # NIMEmbeddingService (1024-dim)
-│       ├── vector_service.py      # ChromaDB + optional Supabase
+│       ├── vector_service.py      # ChromaDB (local storage)
 │       ├── knowledge_graph.py     # NetworkX DiGraph builder
 │       ├── decision_service.py    # Store / retrieve architectural decisions
 │       ├── decision_extractor.py  # LLM extracts decisions from git log
 │       ├── git_service.py         # git blame, log, diff helpers
-│       └── impact_engine.py       # Blast-radius calculator
+│       ├── impact_engine.py       # Blast-radius calculator
+│       └── chat_history_service.py# CG-pilot chat persistence
 │
 ├── cgctl/                         # CLI (thin HTTP client)
 │   ├── main.py                    # Typer entry point
@@ -193,18 +196,12 @@ NVIDIA_EMBED_MODEL=nvidia/nv-embedqa-e5-v5
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8742
 
-# ChromaDB (local vector store — always required)
+# ChromaDB (local vector store)
 CHROMADB_PERSIST_DIR=./chroma_data
-
-# Supabase (optional — enables persistent pgvector storage)
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 # Logging
 LOG_LEVEL=INFO
 ```
-
-All features work with ChromaDB only. Supabase adds persistent cloud storage.
 
 ---
 
@@ -335,7 +332,7 @@ npm run typecheck    # TypeScript type check
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Dashboard | Project overview, health status, recent activity |
+| `/` | Dashboard | Project overview, health status, recent questions from CG-pilot |
 | `/ask` | Q&A | Natural-language query interface with source citations |
 | `/graph` | Knowledge Graph | D3.js interactive graph of files, functions, decisions, authors |
 | `/impact` | Redirect | Opens File Explorer, where impact analysis lives in the file context sidebar |
@@ -345,15 +342,17 @@ npm run typecheck    # TypeScript type check
 | `/indexing` | Indexing | Kick off and monitor index jobs |
 | `/settings` | Settings | Server URL, project configuration |
 
+CG-pilot is accessible from any page via the chat bubble button in the bottom-right corner.
+
 ### Architecture
 
 ```
 Electron main process (electron/main.ts)
-    └── exposes window.cgctl IPC bridge (selectDirectory, etc.)
+    └── exposes window.cgctl IPC bridge (selectDirectory, listFiles, readFile, etc.)
 
 React renderer (src/)
     ├── BrowserRouter with 9 page routes
-    ├── ProjectContext — tracks active project, health, index status
+    ├── ProjectContext — tracks active project, health, index status, selected file path
     └── HTTP calls → FastAPI :8742 (no direct DB or LLM access)
 ```
 
@@ -411,12 +410,13 @@ All services are initialized on `app.state` during startup and are `None` if the
 |---------|------|------|
 | `NIMClient` | `services/llm_client.py` | Sole LLM interface — raw `httpx` against NVIDIA NIM's OpenAI-compatible endpoint. Retry: 429 → exponential backoff, 5xx → 1 retry, timeout → 1 retry |
 | `NIMEmbeddingService` | `services/embedding_service.py` | 1024-dimensional embeddings from `nvidia/nv-embedqa-e5-v5` |
-| `VectorService` | `services/vector_service.py` | ChromaDB (always) + optional Supabase pgvector. Vector IDs are deterministic `SHA256(project_id + file_path + chunk_index)` |
+| `VectorService` | `services/vector_service.py` | ChromaDB (local only). Vector IDs are deterministic `SHA256(project_id + file_path + chunk_index)` |
 | `KnowledgeGraph` | `services/knowledge_graph.py` | NetworkX `DiGraph` with node types: `file`, `function`, `decision`, `author`, `module`. Always rebuilt from scratch on index. Persisted to `.codeguardian/knowledge_graph.json` |
 | `DecisionService` | `services/decision_service.py` | Store and retrieve architectural decisions extracted from git history |
 | `DecisionExtractor` | `services/decision_extractor.py` | LLM parses the last 50 commits to extract structured decisions |
 | `GitService` | `services/git_service.py` | `git blame`, `git log`, `git diff` helpers; initialized per-project when an index job runs |
 | `ImpactEngine` | `services/impact_engine.py` | Traverses the knowledge graph to compute blast-radius reports |
+| `ChatHistoryService` | `services/chat_history_service.py` | Persists CG-pilot chat sessions to `.codeguardian/chat_history/` JSON |
 
 ---
 

@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Uses the OpenAI SDK against the OpenAI-compatible NVIDIA NIM endpoint.
     cgpilot_max_tool_rounds: int = 6
 
+    # ── Compliance Agent ──────────────────────────────────────────────────
+    # Maximum tool-calling rounds per check type in the agentic compliance loop.
+    compliance_max_tool_rounds: int = 20
+
     # ── Supabase ────────────────────────────────────────────────────────
     supabase_url: str = ""
     supabase_key: str = ""

@@ -94,6 +94,7 @@ class CGPilotService:
         project_path: str,
         message: str,
         conversation_history: list[CGPilotMessage] | None = None,
+        file_context: dict | None = None,
     ) -> tuple[str, list[SourceRef], list[CGPilotToolUse], list[CGPilotStep]]:
         logger.info(
             "💬 CG-pilot chat starting: project=%s, message='%s'", project_id, message
@@ -113,7 +114,30 @@ class CGPilotService:
                 {"role": msg_dict["role"], "content": msg_dict["content"]}
             )
 
-        messages.append({"role": "user", "content": message})
+        # ── Inject optional file context ──────────────────────────────
+        user_content = message
+        if file_context:
+            file_path = file_context.get("file_path", "")
+            if file_path:
+                full_path = os.path.join(project_path, file_path)
+                if os.path.isfile(full_path):
+                    try:
+                        with open(full_path, "r") as f:
+                            file_content = f.read()
+                        user_content = (
+                            f"The user has attached this file as additional context:\n\n"
+                            f"```\n{file_path}\n{file_content}\n```\n\n"
+                            f"---\n\n{message}"
+                        )
+                        logger.info(
+                            "📎 Attached file context: %s (%d chars)",
+                            file_path,
+                            len(file_content),
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to read attached file %s: %s", file_path, e)
+
+        messages.append({"role": "user", "content": user_content})
 
         tools_used: list[CGPilotToolUse] = []
         sources: list[SourceRef] = []

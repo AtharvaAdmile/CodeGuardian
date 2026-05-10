@@ -6,6 +6,7 @@ import {
   GitCommit,
   FolderTree,
   Database,
+  ShieldCheck,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ const navItems = [
   { path: "/graph", icon: GitBranch, label: "Knowledge Graph" },
   { path: "/review", icon: GitCommit, label: "Commit Review" },
   { path: "/files", icon: FolderTree, label: "File Explorer" },
+  { path: "/compliance", icon: ShieldCheck, label: "Compliance" },
   { path: "/indexing", icon: Database, label: "Indexing" },
   { path: "/settings", icon: Settings, label: "Settings" },
 ];

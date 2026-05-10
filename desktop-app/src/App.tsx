@@ -1,4 +1,4 @@
-import { useState, useCallback, createContext, useContext, Suspense, lazy } from "react";
+import { useState, useCallback, useEffect, createContext, useContext, Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useProject } from "./hooks/useProject";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -12,6 +12,7 @@ const KnowledgeGraph = lazy(() => import("./pages/KnowledgeGraph"));
 const CommitReview = lazy(() => import("./pages/CommitReview"));
 const FileExplorer = lazy(() => import("./pages/FileExplorer"));
 const Indexing = lazy(() => import("./pages/Indexing"));
+const Compliance = lazy(() => import("./pages/Compliance"));
 const Settings = lazy(() => import("./pages/Settings"));
 
 interface ProjectContextType {
@@ -22,8 +23,10 @@ interface ProjectContextType {
   indexStatus: import("./lib/types").IndexStatus | null;
   healthStatus: import("./lib/types").HealthStatus | null;
   isLoadingHealth: boolean;
+  selectedFilePath: string | null;
   setProject: (path: string, name: string, isValid: boolean) => void;
   clearProject: () => void;
+  setSelectedFilePath: (path: string | null) => void;
 }
 
 const ProjectContext = createContext<ProjectContextType>({
@@ -34,8 +37,10 @@ const ProjectContext = createContext<ProjectContextType>({
   indexStatus: null,
   healthStatus: null,
   isLoadingHealth: false,
+  selectedFilePath: null,
   setProject: () => {},
   clearProject: () => {},
+  setSelectedFilePath: () => {},
 });
 
 export const useProjectContext = () => useContext(ProjectContext);
@@ -80,7 +85,17 @@ function AppContent() {
     clearProject,
   } = useProject();
 
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    function handler(event: CustomEvent) {
+      setPendingSessionId(event.detail);
+    }
+    window.addEventListener("cg-open-session", handler as EventListener);
+    return () => window.removeEventListener("cg-open-session", handler as EventListener);
+  }, []);
 
   const handleSelectClick = useCallback(async () => {
     try {
@@ -121,8 +136,10 @@ function AppContent() {
           indexStatus,
           healthStatus,
           isLoadingHealth,
+          selectedFilePath,
           setProject,
           clearProject,
+          setSelectedFilePath,
         }}
       >
         <div className="flex h-screen bg-bg-primary">
@@ -144,6 +161,7 @@ function AppContent() {
                   <Route path="/review" element={<CommitReview />} />
                   <Route path="/files" element={<FileExplorer />} />
                   <Route path="/indexing" element={<Indexing />} />
+                  <Route path="/compliance" element={<Compliance />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
@@ -159,6 +177,8 @@ function AppContent() {
               projectId={projectName}
               projectPath={projectPath}
               indexStatus={indexStatus?.status}
+              pendingSessionId={pendingSessionId}
+              onClearPendingSession={() => setPendingSessionId(null)}
             />
           )}
         </div>

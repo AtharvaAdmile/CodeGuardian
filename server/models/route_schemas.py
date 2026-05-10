@@ -10,7 +10,7 @@ Covers:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -89,13 +89,25 @@ class CGPilotMessage(BaseModel):
     content: str = Field(..., min_length=1)
 
 
+class FileContextSchema(BaseModel):
+    """An optional file attached as context for CG-pilot."""
+
+    file_path: str = Field(..., description="Relative path to the file from project root.")
+
+
 class CGPilotRequest(BaseModel):
     """POST /api/cg-pilot/chat"""
 
     project_id: str = Field(..., description="Project identifier.")
     project_path: str = Field(..., description="Absolute path to the project root.")
     message: str = Field(..., min_length=1)
+    session_id: str | None = Field(
+        None, description="Resume an existing chat session."
+    )
     conversation_history: list[CGPilotMessage] = Field(default_factory=list)
+    file_context: FileContextSchema | None = Field(
+        None, description="Optional file to attach as context for the query."
+    )
 
 
 class CGPilotToolUse(BaseModel):
@@ -121,10 +133,47 @@ class CGPilotResponse(BaseModel):
     """Response from POST /api/cg-pilot/chat."""
 
     answer: str
+    session_id: str = Field(..., description="Session ID for continuing the chat.")
     sources: list[SourceRef] = Field(default_factory=list)
     tools_used: list[CGPilotToolUse] = Field(default_factory=list)
     steps: list[CGPilotStep] = Field(default_factory=list)
     indexed: bool = True
+
+
+class ChatSessionSummary(BaseModel):
+    """Summary of a chat session for listing."""
+
+    session_id: str
+    project_id: str
+    title: str = ""
+    message_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ChatSessionDetail(BaseModel):
+    """Full chat session with messages."""
+
+    session_id: str
+    project_id: str
+    title: str = ""
+    messages: list[dict] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ChatHistoryListResponse(BaseModel):
+    """List of chat sessions for a project."""
+
+    sessions: list[ChatSessionSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class DeleteSessionResponse(BaseModel):
+    """Response from deleting a chat session."""
+
+    success: bool = True
+    message: str = "Session deleted."
 
 
 class CGPilotStatusResponse(BaseModel):
@@ -711,3 +760,103 @@ class CommitActionResponse(BaseModel):
     message: str = ""
     status: CommitReviewResponse | None = None
     error: str | None = None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Compliance Check Schemas
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class ComplianceCheckType(BaseModel):
+    """Describes one available compliance check type."""
+
+    id: str
+    name: str
+    description: str
+    category: str = "security"
+    default_severity: str = "medium"
+
+
+class ComplianceStep(BaseModel):
+    """A single step in the agentic compliance check loop."""
+
+    round: int = Field(..., description="Round number (1-indexed).")
+    action: str = Field(
+        ..., description="One of: plan, tool_call, observation, finding, check_complete, final"
+    )
+    check_type: str = ""
+    tool_name: str = ""
+    tool_summary: str = ""
+    message: str = ""
+    findings: list[ComplianceFinding] = Field(default_factory=list)
+
+
+class ComplianceScanRequest(BaseModel):
+    """POST /api/compliance/scan"""
+
+    project_id: str = Field(..., description="Unique project identifier.")
+    project_path: str = Field(..., description="Absolute path to the project root.")
+    selected_checks: list[str] = Field(
+        default_factory=lambda: [
+            "secrets", "pii", "gdpr", "hipaa",
+            "dangerous_funcs", "sql_injection",
+        ],
+        description="List of check type IDs to run.",
+    )
+
+
+class ComplianceFinding(BaseModel):
+    """A single compliance violation found during scanning."""
+
+    file_path: str = ""
+    line: int = 0
+    column: int = 0
+    severity: str = "medium"
+    category: str = "security"
+    check_type: str = ""
+    message: str = ""
+    snippet: str = ""
+    suggestion: str = ""
+
+
+class ComplianceScanStatus(BaseModel):
+    """Progress / status of an in-flight compliance scan job."""
+
+    job_id: str = ""
+    status: Literal["queued", "scanning", "completed", "failed", "cancelled"] = "queued"
+    current_check: str | None = None
+    files_scanned: int = 0
+    files_total: int = 0
+    total_violations: int = 0
+    violation_counts: dict[str, int] = Field(
+        default_factory=lambda: {"critical": 0, "high": 0, "medium": 0, "low": 0},
+    )
+    compliance_score: float | None = None
+    steps: list[ComplianceStep] = Field(default_factory=list)
+    error: str | None = None
+    can_overwrite: bool = True
+
+
+class ComplianceReport(BaseModel):
+    """Final compliance scan report."""
+
+    job_id: str = ""
+    project_id: str = ""
+    project_path: str = ""
+    scanned_files: int = 0
+    total_violations: int = 0
+    violation_counts: dict[str, int] = Field(
+        default_factory=lambda: {"critical": 0, "high": 0, "medium": 0, "low": 0},
+    )
+    compliance_score: float = 100.0
+    passed: bool = True
+    summary: str = ""
+    violations: list[ComplianceFinding] = Field(default_factory=list)
+    check_types_ran: list[str] = Field(default_factory=list)
+    steps: list[ComplianceStep] = Field(default_factory=list)
+    can_overwrite: bool = True
+
+
+# Rebuild models that use forward references (needed with from __future__ import annotations)
+ComplianceScanStatus.model_rebuild()
+ComplianceReport.model_rebuild()

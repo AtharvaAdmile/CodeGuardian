@@ -431,6 +431,28 @@ function registerIpcHandlers(): void {
         });
     });
 
+    // Compliance scan API
+    ipcMain.handle('cgctl:startComplianceScan', async (_, projectId: string, projectPath: string, selectedChecks: string[]) => {
+        return serverFetch('POST', '/api/compliance/scan', {
+            project_id: projectId,
+            project_path: projectPath,
+            selected_checks: selectedChecks,
+            mode: 'directory',
+        });
+    });
+
+    ipcMain.handle('cgctl:getComplianceScanStatus', async (_, jobId: string) => {
+        return serverFetch('GET', `/api/compliance/status/${jobId}`);
+    });
+
+    ipcMain.handle('cgctl:getComplianceReport', async (_, jobId: string) => {
+        return serverFetch('GET', `/api/compliance/report/${jobId}`);
+    });
+
+    ipcMain.handle('cgctl:listComplianceChecks', async () => {
+        return serverFetch('GET', '/api/compliance/checks');
+    });
+
     // Get file expert
     ipcMain.handle('cgctl:getFileExpert', async (_, projectPath: string, filePath: string) => {
         return serverFetch('POST', '/api/analyze/expert', {

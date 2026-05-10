@@ -181,6 +181,13 @@ async def lifespan(app: FastAPI):
 
     app.state.retrieval_service = retrieval_service
 
+    # ── Chat History Service (CG-pilot session persistence) ─────────────
+    from server.services.chat_history_service import ChatHistoryService
+
+    chat_history_service = ChatHistoryService()
+    app.state.chat_history_service = chat_history_service
+    logger.info("✅ ChatHistoryService initialised")
+
     # ── CG-pilot (OpenAI SDK over NVIDIA NIM-compatible endpoint) ───────
     from server.services.cg_pilot_service import CGPilotService
 
@@ -293,6 +300,7 @@ def create_app() -> FastAPI:
     from server.routes.context import router as context_router
     from server.routes.cg_pilot import router as cg_pilot_router
     from server.routes.dashboard import router as dashboard_router
+    from server.routes.compliance import router as compliance_router
 
     app.include_router(health_router)
     app.include_router(query_router)
@@ -305,6 +313,7 @@ def create_app() -> FastAPI:
     app.include_router(context_router)
     app.include_router(cg_pilot_router)
     app.include_router(dashboard_router)
+    app.include_router(compliance_router)
 
     return app
 

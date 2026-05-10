@@ -90,6 +90,7 @@ def serve(
 
 def _start_mcp(sse: bool, host: str, port: int, log_level: str) -> None:
     from cgctl.utils.output import console
+    from rich.console import Console as RichConsole
 
     import logging
     logging.basicConfig(
@@ -110,14 +111,14 @@ def _start_mcp(sse: bool, host: str, port: int, log_level: str) -> None:
         argv += ["--sse", "--host", host, "--port", str(port)]
     sys.argv = argv
 
-    console.print(
+    stderr_console = RichConsole(stderr=True)
+    stderr_console.print(
         Panel(
             f"MCP server starting in [bold]{'SSE' if sse else 'stdio'}[/bold] mode"
             + (f" on {host}:{port}" if sse else ""),
             title="🛡️  [bold]CodeGuardian MCP[/bold]",
             border_style="green",
         ),
-        file=sys.stderr,
     )
 
     try:

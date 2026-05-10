@@ -104,3 +104,6 @@ Temporary Items
 # Generated Tests
 tests/
 generated_test_cases/
+new_indexing_screen.html
+new_indexing_screen.png
+PLAN.md

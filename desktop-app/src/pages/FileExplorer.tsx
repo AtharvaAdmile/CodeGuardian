@@ -12,7 +12,7 @@ import { getHealthColor } from "../lib/constants";
 import type { AffectedFileSchema, DependencyResponse, ExpertResponse, FileNode, HealthResponse, ImpactAnalyzeResponse } from "../lib/types";
 
 export default function FileExplorer() {
-  const { projectPath } = useProjectContext();
+  const { projectPath, setSelectedFilePath } = useProjectContext();
   const [files, setFiles] = useState<FileNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [fileContent, setFileContent] = useState<string>("");
@@ -30,15 +30,37 @@ export default function FileExplorer() {
 
     const loadFiles = async () => {
       try {
-        const fileList = await window.cgctl.listFiles(projectPath);
-        const mapped: FileNode[] = fileList.map((f: any) => ({
-          id: f.path,
-          name: f.name,
-          path: f.path,
-          size: f.size,
-          type: f.type,
-        }));
-        setFiles(mapped);
+        const fileList: { path: string; name: string; size: number; type: "file" | "directory" }[] =
+          await window.cgctl.listFiles(projectPath);
+
+        const root: FileNode[] = [];
+        const map = new Map<string, FileNode>();
+
+        for (const f of fileList) {
+          const node: FileNode = {
+            id: f.path,
+            name: f.name,
+            path: f.path,
+            size: f.size,
+            type: f.type,
+          };
+          if (f.type === "directory") {
+            node.children = [];
+          }
+          map.set(f.path, node);
+        }
+
+        for (const f of fileList) {
+          const node = map.get(f.path)!;
+          const parentDir = f.path.includes("/") ? f.path.substring(0, f.path.lastIndexOf("/")) : null;
+          if (parentDir && map.has(parentDir)) {
+            map.get(parentDir)!.children!.push(node);
+          } else {
+            root.push(node);
+          }
+        }
+
+        setFiles(root);
       } catch (error) {
         console.error("Failed to load files:", error);
       }
@@ -49,6 +71,7 @@ export default function FileExplorer() {
 
   const handleFileSelect = async (file: FileNode) => {
     setSelectedFile(file);
+    setSelectedFilePath(file.path);
     setIsLoadingFile(true);
     setIsLoadingAnalysis(true);
     setHealth(null);

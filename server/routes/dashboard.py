@@ -36,6 +36,15 @@ class DashboardHotspot(BaseModel):
     reason: str
 
 
+class RecentQuestion(BaseModel):
+    session_id: str
+    title: str = ""
+    preview: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    message_count: int = 0
+
+
 class DashboardResponse(BaseModel):
     project_path: str
     files_indexed: int = 0
@@ -48,6 +57,7 @@ class DashboardResponse(BaseModel):
     is_indexing: bool = False
     index_status: str = ""
     index_job_id: str | None = None
+    recent_questions: list[RecentQuestion] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -142,6 +152,18 @@ async def get_dashboard_metrics(project_path: str, request: Request) -> Dashboar
 
         if not result.is_indexing and result.files_indexed == 0:
             result.files_indexed = _count_source_files(project_path)
+
+        # ── Recent CG-pilot questions ─────────────────────────────────
+        chat_history = getattr(request.app.state, "chat_history_service", None)
+        if chat_history:
+            try:
+                project_id = pp.name
+                recent = chat_history.get_recent(project_id, limit=5)
+                result.recent_questions = [
+                    RecentQuestion(**q) for q in recent
+                ]
+            except Exception as exc:
+                logger.debug("Failed to load recent questions: %s", exc)
 
     except HTTPException:
         raise

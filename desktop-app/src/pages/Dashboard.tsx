@@ -6,12 +6,13 @@ import {
   Activity,
   Network,
   AlertTriangle,
+  MessageSquare,
   TrendingUp,
 } from "lucide-react";
 import { useProjectContext } from "../App";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { getDashboardMetrics } from "../lib/api";
-import type { DashboardResponse, DashboardHotspot } from "../lib/types";
+import type { DashboardResponse, DashboardHotspot, RecentQuestion } from "../lib/types";
 
 interface MetricCardProps {
   icon: React.ReactNode;
@@ -73,6 +74,7 @@ export default function Dashboard() {
   const avgHealth = dashboardData?.avg_health_score ?? 0;
   const graphEdges = dashboardData?.graph_edges ?? 0;
   const hotspots = dashboardData?.hotspots ?? [];
+  const recentQuestions = dashboardData?.recent_questions ?? [];
 
   return (
     <div className="flex flex-col h-full">
@@ -117,17 +119,45 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-bg-secondary border border-border rounded-xl p-4">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-accent-blue" />
-            Recent Questions
-          </h2>
-          <div className="space-y-3">
-            <div className="text-center py-8 text-text-muted">
-              <p className="text-sm">CG-pilot conversations will appear here</p>
+          <div className="bg-bg-secondary border border-border rounded-xl p-4">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-accent-blue" />
+              Recent Questions
+            </h2>
+            <div className="space-y-3">
+              {recentQuestions.length === 0 ? (
+                <div className="text-center py-8 text-text-muted">
+                  <p className="text-sm">No questions asked yet</p>
+                  <p className="text-xs mt-1">Ask CG-pilot about your codebase</p>
+                </div>
+              ) : (
+                recentQuestions.map((q: RecentQuestion) => (
+                  <div
+                    key={q.session_id}
+                    className="flex items-start gap-3 rounded-lg border border-border bg-bg-primary p-3 hover:border-accent-blue/30 transition-colors cursor-pointer"
+                    onClick={() => {
+                      window.dispatchEvent(
+                        new CustomEvent("cg-open-session", { detail: q.session_id })
+                      );
+                    }}
+                  >
+                    <MessageSquare className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-cyan" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-text-primary">
+                        {q.title || q.preview}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs text-text-muted">
+                        {q.preview}
+                      </p>
+                      <p className="mt-1 text-[10px] text-text-muted">
+                        {q.message_count} message{q.message_count !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        </div>
 
         <div className="bg-bg-secondary border border-border rounded-xl p-4">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">

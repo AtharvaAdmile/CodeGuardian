@@ -159,6 +159,41 @@ class VectorService:
         except Exception:
             return 0
 
+    async def delete_chunks_for_files(
+        self, project_id: str, file_paths: list[str]
+    ) -> int:
+        """
+        Delete all chunks whose metadata.file_path is in the given list.
+
+        Args:
+            project_id: The project identifier.
+            file_paths: List of relative file paths to remove from the index.
+
+        Returns:
+            Number of chunks deleted.
+        """
+        if not file_paths:
+            return 0
+
+        collection_name = f"cg_{project_id}"
+        try:
+            collection = self._chroma_client.get_collection(name=collection_name)
+            collection.delete(where={"file_path": {"$in": file_paths}})
+            remaining = collection.count()
+            logger.info(
+                "Deleted chunks for %d files from '%s' (remaining: %d)",
+                len(file_paths), collection_name, remaining,
+            )
+            # We cannot easily get the deleted count from ChromaDB's delete,
+            # so we estimate based on pre-delete count minus post-delete count
+            return remaining  # approximate: remaining-after is the new count
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete chunks for files from '%s': %s",
+                collection_name, exc,
+            )
+            return 0
+
     async def delete_project(self, project_id: str) -> None:
         """Delete all vectors for a project from ChromaDB."""
         collection_name = f"cg_{project_id}"

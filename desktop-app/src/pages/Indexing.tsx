@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 
 function TriStateCheckbox({ checked, indeterminate, onChange, disabled }: {
   checked: boolean;
@@ -34,6 +35,9 @@ import {
   ChevronDown,
   ChevronUp,
   FileSearch,
+  AlertTriangle,
+  X,
+  GitCommit,
 } from "lucide-react";
 import { useProjectContext } from "../App";
 import {
@@ -44,8 +48,16 @@ import {
   getIndexEstimate,
   getIndexHistory,
   clearIndexHistory,
+  checkGitWorkingTree,
+  getIndexDiffStatus,
 } from "../lib/api";
-import type { IndexStatus, IndexEstimateResponse, IndexHistoryEntry } from "../lib/types";
+import type {
+  IndexStatus,
+  IndexEstimateResponse,
+  IndexHistoryEntry,
+  GitCleanlinessResponse,
+  IndexDiffResponse,
+} from "../lib/types";
 
 const SUPPORTED_EXTENSIONS = new Set([".py", ".js", ".ts", ".jsx", ".tsx"]);
 
@@ -148,6 +160,13 @@ export default function Indexing() {
   const [activeGroupTab, setActiveGroupTab] = useState<"filetype" | "extension" | "directory">("filetype");
   const [deleting, setDeleting] = useState(false);
 
+  const navigate = useNavigate();
+  const [gitStatus, setGitStatus] = useState<GitCleanlinessResponse | null>(null);
+  const [gitStatusLoading, setGitStatusLoading] = useState(true);
+  const [dismissDirtyWarning, setDismissDirtyWarning] = useState(false);
+  const [diffPreview, setDiffPreview] = useState<IndexDiffResponse | null>(null);
+  const [diffPreviewLoading, setDiffPreviewLoading] = useState(false);
+
   const loadHistory = useCallback(async (pid: string) => {
     try {
       const entries = await getIndexHistory(pid);
@@ -180,18 +199,36 @@ export default function Indexing() {
     if (!projectName || !projectPath) return;
     setCheckLoading(true);
     setEstimate(null);
+    setDiffPreview(null);
+    setGitStatus(null);
+    setDismissDirtyWarning(false);
 
     Promise.all([
       checkIndexStatus(projectName),
       loadHistory(projectName),
       loadEstimate(projectName, projectPath),
-    ]).then(([status]) => {
+      checkGitWorkingTree(projectPath),
+    ]).then(([status, _, __, git]) => {
       setIsAlreadyIndexed(status.is_indexed);
       setChunksCount(status.chunks_count);
+      setGitStatus(git);
+
+      if (status.is_indexed && git.clean) {
+        setDiffPreviewLoading(true);
+        getIndexDiffStatus(projectName, projectPath)
+          .then(setDiffPreview)
+          .catch(() => setDiffPreview(null))
+          .finally(() => setDiffPreviewLoading(false));
+      }
     }).catch(() => {
       setIsAlreadyIndexed(false);
       setChunksCount(0);
-    }).finally(() => setCheckLoading(false));
+      setGitStatus(null);
+      setDiffPreview(null);
+    }).finally(() => {
+      setCheckLoading(false);
+      setGitStatusLoading(false);
+    });
   }, [projectName, projectPath, loadHistory, loadEstimate]);
 
   useEffect(() => {
@@ -258,7 +295,7 @@ export default function Indexing() {
     try {
       const includeExtensions = Array.from(selectedExtensions).filter(e => SUPPORTED_EXTENSIONS.has(e));
       const includeDirs = Array.from(selectedDirs);
-      const result = await indexProject(projectName, projectPath, true, includeExtensions.length > 0 ? includeExtensions : undefined, includeDirs.length > 0 ? includeDirs : undefined);
+      const result = await indexProject(projectName, projectPath, false, includeExtensions.length > 0 ? includeExtensions : undefined, includeDirs.length > 0 ? includeDirs : undefined);
       if (result.job_id) {
         setLocalStatus({
           job_id: result.job_id,
@@ -274,6 +311,17 @@ export default function Indexing() {
         setProject(projectPath, projectName, true);
       }
     } catch (error) {
+      const msg = (error as Error).message;
+      if (msg.includes("409") || msg.toLowerCase().includes("uncommitted")) {
+        setIsIndexing(false);
+        setStartTime(null);
+        try {
+          const git = await checkGitWorkingTree(projectPath);
+          setGitStatus(git);
+        } catch { /* ignore */ }
+        setDismissDirtyWarning(false);
+        return;
+      }
       console.error("Failed to start indexing:", error);
       setIsIndexing(false);
       setStartTime(null);
@@ -431,6 +479,11 @@ export default function Indexing() {
             <div className="flex items-center space-x-2 text-sm text-text-muted">
               <Zap className={`w-4 h-4 text-accent-blue animate-pulseFast`} />
               <span>Processing Rate: {fileProcessingRate} files/s</span>
+              {localStatus?.incremental && (
+                <span className="text-xs bg-accent-blue/10 text-accent-blue border border-accent-blue/20 px-2 py-0.5 rounded">
+                  Incremental
+                </span>
+              )}
             </div>
           </div>
           <div className="relative h-6 bg-bg-tertiary/60 border border-border/80 rounded-full overflow-hidden shadow-inner">
@@ -500,7 +553,10 @@ export default function Indexing() {
           </div>
 
           <div className="bg-bg-secondary border border-border rounded-xl p-5 flex flex-col">
-            <h3 className="text-sm font-medium text-text-primary mb-4 border-b border-border pb-2">Stats</h3>
+            <h3 className="text-sm font-medium text-text-primary mb-4 border-b border-border pb-2">
+              Stats
+              {localStatus?.incremental && <span className="ml-2 text-xs text-accent-blue font-normal">(incremental)</span>}
+            </h3>
             <div className="grid grid-cols-2 gap-y-6 gap-x-4 flex-1">
               <div>
                 <p className="text-xs text-text-muted mb-1">Total Files</p>
@@ -510,6 +566,18 @@ export default function Indexing() {
                 <p className="text-xs text-text-muted mb-1">Chunks Created</p>
                 <p className="text-lg font-semibold text-text-primary">{localStatus?.chunks_created || 0}</p>
               </div>
+              {localStatus?.incremental && (
+                <>
+                  <div>
+                    <p className="text-xs text-text-muted mb-1">Added Files</p>
+                    <p className="text-lg font-semibold text-accent-green">{localStatus?.added_files || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-text-muted mb-1">Modified Files</p>
+                    <p className="text-lg font-semibold text-accent-blue">{localStatus?.modified_files || 0}</p>
+                  </div>
+                </>
+              )}
               <div>
                 <p className="text-xs text-text-muted mb-1">Graph Nodes</p>
                 <p className="text-lg font-semibold text-text-primary">{localStatus?.graph_nodes || 0}</p>
@@ -536,6 +604,41 @@ export default function Indexing() {
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* ── Dirty working tree warning banner ────────────────────────────── */}
+      {gitStatus?.has_changes && !dismissDirtyWarning && (
+        <div className="bg-accent-amber/10 border border-accent-amber/30 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-accent-amber shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-accent-amber">Working Tree Not Clean</h3>
+              <p className="text-sm text-text-secondary mt-1">{gitStatus.summary}</p>
+              <p className="text-xs text-text-muted mt-1">
+                Indexing requires a clean working tree to keep the index in sync with git history.
+                Please commit or stash your changes first.
+              </p>
+              <div className="flex items-center gap-3 mt-3">
+                <button
+                  onClick={() => navigate('/review')}
+                  className="px-4 py-2 bg-accent-amber hover:bg-accent-amber/80 rounded-lg text-sm font-medium text-white transition-colors flex items-center gap-2"
+                >
+                  <GitCommit className="w-4 h-4" />
+                  Go to Commit Review
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setDismissDirtyWarning(true)}
+              className="p-1 hover:bg-bg-tertiary rounded transition-colors shrink-0"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4 text-text-muted" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Main content (grayed out when dirty) ─────────────────────────── */}
+      <div className={gitStatus?.has_changes && !dismissDirtyWarning ? 'pointer-events-none opacity-40 select-none' : ''}>
       <section>
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -544,38 +647,77 @@ export default function Indexing() {
           </div>
         </div>
 
-        {checkLoading ? (
+        {checkLoading || gitStatusLoading ? (
           <div className="flex items-center justify-center py-16">
             <div className="w-8 h-8 spinner"></div>
           </div>
         ) : isAlreadyIndexed ? (
-          <div className="bg-bg-secondary border border-accent-green/30 rounded-xl p-8 text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-accent-green/10 flex items-center justify-center mx-auto">
-              <CheckCircle className="w-8 h-8 text-accent-green" />
+          diffPreviewLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 spinner"></div>
             </div>
-            <h3 className="text-lg font-semibold text-text-primary">Project Already Indexed</h3>
-            <p className="text-text-muted text-sm max-w-md mx-auto">
-              This project has <strong>{chunksCount.toLocaleString()}</strong> chunks stored in the vector index.
-              You can reindex if you've made significant changes to the codebase.
-            </p>
-            <div className="flex items-center justify-center gap-3 pt-2">
-              <button
-                onClick={handleStartIndexing}
-                className="px-6 py-3 bg-accent-blue hover:bg-accent-blue/80 rounded-xl text-white font-semibold transition-all flex items-center gap-2 shadow-lg shadow-accent-blue/25 hover:shadow-accent-blue/40"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Reindex Project
-              </button>
-              <button
-                onClick={handleDeleteIndex}
-                disabled={deleting}
-                className="px-6 py-3 bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border border-accent-red/30 rounded-xl font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
-              >
-                <Trash2 className="w-4 h-4" />
-                {deleting ? "Deleting..." : "Delete Index"}
-              </button>
+          ) : diffPreview?.incremental_possible ? (
+            <div className="bg-bg-secondary border border-accent-blue/30 rounded-xl p-8 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-accent-blue/10 flex items-center justify-center mx-auto">
+                <RefreshCw className="w-8 h-8 text-accent-blue" />
+              </div>
+              <h3 className="text-lg font-semibold text-text-primary">Incremental Update Available</h3>
+              <p className="text-text-muted text-sm max-w-md mx-auto">
+                {diffPreview.message}
+              </p>
+              <div className="flex items-center justify-center gap-4 text-sm">
+                {diffPreview.added.length > 0 && <span className="text-accent-green">+{diffPreview.added.length} added</span>}
+                {diffPreview.modified.length > 0 && <span className="text-accent-blue">~{diffPreview.modified.length} modified</span>}
+                {diffPreview.deleted.length > 0 && <span className="text-accent-red">-{diffPreview.deleted.length} deleted</span>}
+              </div>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  onClick={handleStartIndexing}
+                  className="px-6 py-3 bg-accent-blue hover:bg-accent-blue/80 rounded-xl text-white font-semibold transition-all flex items-center gap-2 shadow-lg shadow-accent-blue/25 hover:shadow-accent-blue/40"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Update Index
+                </button>
+                <button
+                  onClick={handleDeleteIndex}
+                  disabled={deleting}
+                  className="px-6 py-3 bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border border-accent-red/30 rounded-xl font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleting ? "Deleting..." : "Delete Index"}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-bg-secondary border border-accent-green/30 rounded-xl p-8 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-accent-green/10 flex items-center justify-center mx-auto">
+                <CheckCircle className="w-8 h-8 text-accent-green" />
+              </div>
+              <h3 className="text-lg font-semibold text-text-primary">Project Already Indexed</h3>
+              <p className="text-text-muted text-sm max-w-md mx-auto">
+                {diffPreview?.message || (
+                  <>This project has <strong>{chunksCount.toLocaleString()}</strong> chunks stored in the vector index.</>
+                )}
+              </p>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  onClick={handleStartIndexing}
+                  className="px-6 py-3 bg-accent-blue hover:bg-accent-blue/80 rounded-xl text-white font-semibold transition-all flex items-center gap-2 shadow-lg shadow-accent-blue/25 hover:shadow-accent-blue/40"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Force Reindex
+                </button>
+                <button
+                  onClick={handleDeleteIndex}
+                  disabled={deleting}
+                  className="px-6 py-3 bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border border-accent-red/30 rounded-xl font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleting ? "Deleting..." : "Delete Index"}
+                </button>
+              </div>
+            </div>
+          )
         ) : localStatus?.status === "failed" ? (
           <div className="bg-bg-secondary border border-accent-red/30 rounded-xl p-8 text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-accent-red/10 flex items-center justify-center mx-auto">
@@ -832,6 +974,7 @@ export default function Indexing() {
           </div>
         )}
       </section>
+      </div>{/* end gray-out wrapper */}
     </div>
   );
 }

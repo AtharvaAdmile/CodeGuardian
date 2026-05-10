@@ -303,6 +303,13 @@ class IndexStatus(BaseModel):
     chunks_created: int = 0
     current_file: str | None = None
 
+    # ── Incremental indexing info ───────────────────────────────────
+    incremental: bool = False
+    commit_sha: str = ""
+    added_files: int = 0
+    modified_files: int = 0
+    deleted_files: int = 0
+
     # ── Phase 2: Knowledge graph build ──────────────────────────────
     graph_status: str = Field(
         "pending",
@@ -328,6 +335,45 @@ class IndexHistoryEntry(BaseModel):
     status: str
     duration: str
     project_path: str
+    commit_sha: str = ""
+    incremental: bool = False
+
+
+class GitCleanlinessResponse(BaseModel):
+    """GET /api/index/check-working-tree response."""
+
+    clean: bool
+    has_changes: bool
+    staged_files: int = 0
+    unstaged_files: int = 0
+    untracked_files: int = 0
+    summary: str = ""
+
+
+class IndexWorkingTreeRequest(BaseModel):
+    """POST /api/index/check-working-tree"""
+
+    project_path: str = Field(..., description="Absolute path to the project root.")
+
+
+class IndexDiffRequest(BaseModel):
+    """POST /api/index/diff-status"""
+
+    project_id: str
+    project_path: str
+
+
+class IndexDiffResponse(BaseModel):
+    """Preview of what an incremental index would do."""
+
+    commit_sha: str = ""
+    last_indexed_commit: str = ""
+    added: list[str] = Field(default_factory=list)
+    modified: list[str] = Field(default_factory=list)
+    deleted: list[str] = Field(default_factory=list)
+    total_changed: int = 0
+    incremental_possible: bool = False
+    message: str = ""
 
 
 class ExtensionEstimate(BaseModel):

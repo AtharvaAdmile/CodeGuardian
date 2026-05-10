@@ -38,8 +38,13 @@ from server.models.route_schemas import (
     ExtensionEstimate,
     DirectoryEstimate,
     IndexHistoryEntry,
+    GitCleanlinessResponse,
+    IndexWorkingTreeRequest,
+    IndexDiffRequest,
+    IndexDiffResponse,
 )
 from server.services.embedding_service import NIMEmbeddingService
+from server.services.git_service import GitService
 
 logger = logging.getLogger("codeguardian.routes.indexing")
 
@@ -582,12 +587,20 @@ async def _index_project(
     knowledge_graph=None,
     include_extensions: set[str] | None = None,
     include_directories: list[str] | None = None,
+    *,
+    incremental: bool = False,
+    diff_info: dict | None = None,
+    git_service: GitService | None = None,
+    last_indexed_commit: str = "",
 ) -> None:
     """
     Run the 2-phase indexing pipeline.
 
     Phase 1 (fast): Code → embeddings → vector store
     Phase 2:        Rebuild knowledge graph
+
+    When *incremental* is True and *diff_info* is provided, Phase 1 only
+    processes files changed since the last indexed commit.
 
     Progress is written to ``jobs[job_id]`` for polling.
     """
@@ -597,15 +610,31 @@ async def _index_project(
 
     try:
         # ── Phase 1: Code indexing ─────────────────────────────────────
-        await _phase1_index_code(
-            project_id=project_id,
-            project_path=project_path,
-            embedding_service=embedding_service,
-            vector_service=vector_service,
-            status=status,
-            include_extensions=include_extensions,
-            include_directories=include_directories,
-        )
+        if incremental and diff_info and git_service:
+            status.incremental = True
+            await _phase1_index_incremental(
+                project_id=project_id,
+                project_path=project_path,
+                diff_info=diff_info,
+                git_service=git_service,
+                embedding_service=embedding_service,
+                vector_service=vector_service,
+                status=status,
+                last_indexed_commit=last_indexed_commit,
+            )
+        else:
+            if force:
+                await vector_service.delete_project(project_id)
+
+            await _phase1_index_code(
+                project_id=project_id,
+                project_path=project_path,
+                embedding_service=embedding_service,
+                vector_service=vector_service,
+                status=status,
+                include_extensions=include_extensions,
+                include_directories=include_directories,
+            )
 
         # ── Phase 2: Knowledge Graph ────────────────────────────────────
         await _phase2_knowledge_graph(
@@ -613,6 +642,10 @@ async def _index_project(
             status=status,
             knowledge_graph=knowledge_graph,
         )
+
+        # Store commit SHA
+        if git_service:
+            status.commit_sha = git_service.get_head_sha()
 
         status.status = JobStatus.COMPLETED
 
@@ -631,16 +664,19 @@ async def _index_project(
             status=status.status.value if hasattr(status.status, 'value') else str(status.status),
             duration=duration_str,
             project_path=project_path,
+            commit_sha=status.commit_sha,
+            incremental=status.incremental,
         )
         _append_history(project_id, history_entry)
 
         logger.info(
-            "Indexing job %s fully completed: %d files, %d chunks, graph=%s (%d nodes)",
+            "Indexing job %s fully completed: %d files, %d chunks, graph=%s (%d nodes) incremental=%s",
             job_id,
             status.files_processed,
             status.chunks_created,
             status.graph_status,
             status.graph_nodes,
+            status.incremental,
         )
 
     except Exception as exc:
@@ -687,9 +723,247 @@ def _clear_history(project_id: str) -> None:
         path.unlink()
 
 
+def _get_last_indexed_commit(project_id: str) -> str | None:
+    """Return the commit SHA from the most recent index history entry, or None."""
+    entries = _load_history(project_id)
+    for entry in reversed(entries):
+        sha = entry.get("commit_sha", "")
+        if sha:
+            return sha
+    return None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Phase 1 — Incremental indexing (git diff-based)
+# ═════════════════════════════════════════════════════════════════════════
+
+
+async def _index_single_file(
+    project_id: str,
+    project_path: str,
+    rel_path: str,
+    content: str,
+    pending_ids: list[str],
+    pending_texts: list[str],
+    pending_meta: list[dict],
+    chunk_index_start: int,
+) -> int:
+    """Chunk a single file, populate pending lists, return number of chunks added."""
+    file_chunks = _chunk_file(content, str(Path(project_path) / rel_path))
+    for i, fc in enumerate(file_chunks):
+        doc_id = NIMEmbeddingService.generate_id(
+            project_id, rel_path, chunk_index_start + i
+        )
+        pending_ids.append(doc_id)
+        pending_texts.append(fc["text"])
+        pending_meta.append({
+            "file_path": rel_path,
+            "start_line": fc["start_line"],
+            "end_line": fc["end_line"],
+            "chunk_type": fc["chunk_type"],
+            "language": fc["language"],
+        })
+    return len(file_chunks)
+
+
+async def _phase1_index_incremental(
+    project_id: str,
+    project_path: str,
+    diff_info: dict,
+    git_service: GitService,
+    embedding_service: NIMEmbeddingService,
+    vector_service,
+    status: IndexStatus,
+    last_indexed_commit: str,
+) -> list[str]:
+    """
+    Index only the files changed since *last_indexed_commit*.
+
+    *diff_info* contains:
+      added (list[str]), modified (list[str]),
+      deleted (list[str]), renamed (list[tuple[str,str]])
+
+    Steps:
+      1. Delete chunks for deleted and renamed-old files.
+      2. For modified files: delete old chunks, chunk new content, index.
+      3. For added and renamed-new files: chunk new content and index.
+    """
+    root = Path(project_path)
+    rel_paths: list[str] = []
+
+    added = diff_info.get("added", [])
+    modified = diff_info.get("modified", [])
+    deleted = diff_info.get("deleted", [])
+    renamed = diff_info.get("renamed", [])
+
+    # Collect all file paths to delete from vector store
+    files_to_delete: list[str] = list(deleted)
+    files_to_delete.extend(old for old, _ in renamed)
+    files_to_delete.extend(modified)  # delete old chunks before re-adding
+
+    if files_to_delete:
+        await vector_service.delete_chunks_for_files(project_id, files_to_delete)
+        status.deleted_files = len(deleted) + len(renamed)
+        logger.info(
+            "Deleted chunks for %d files (deleted + renamed + modified)",
+            len(files_to_delete),
+        )
+
+    # Files to (re-)index: added + modified + renamed-new
+    files_to_index: list[tuple[str, str | None]] = []
+    for fp in added:
+        files_to_index.append((fp, None))
+    for fp in modified:
+        files_to_index.append((fp, None))
+    for old, new in renamed:
+        files_to_index.append((new, old))
+
+    status.files_total = len(files_to_index)
+    status.incremental = True
+    status.added_files = len(added)
+    status.modified_files = len(modified) + len(renamed)
+
+    pending_ids: list[str] = []
+    pending_texts: list[str] = []
+    pending_meta: list[dict] = []
+    global_chunk_index = 0
+
+    for rel_path, _ in files_to_index:
+        fp = root / rel_path
+        ext = fp.suffix.lower()
+        if ext not in _SUPPORTED_EXTENSIONS:
+            status.errors.append(f"{rel_path}: unsupported extension, skipped")
+            status.files_processed += 1
+            continue
+
+        try:
+            content = fp.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            status.errors.append(f"{rel_path}: read error — {exc}")
+            status.files_processed += 1
+            continue
+
+        rel_paths.append(rel_path)
+        status.current_file = rel_path
+
+        num_chunks = await _index_single_file(
+            project_id, project_path, rel_path, content,
+            pending_ids, pending_texts, pending_meta,
+            global_chunk_index,
+        )
+        global_chunk_index += num_chunks
+
+        if len(pending_texts) >= _EMBED_BATCH_SIZE:
+            await _flush_batch(
+                embedding_service, vector_service, project_id,
+                pending_ids, pending_texts, pending_meta, status,
+            )
+            pending_ids.clear()
+            pending_texts.clear()
+            pending_meta.clear()
+
+        status.files_processed += 1
+
+    if pending_texts:
+        await _flush_batch(
+            embedding_service, vector_service, project_id,
+            pending_ids, pending_texts, pending_meta, status,
+        )
+
+    status.current_file = None
+
+    logger.info(
+        "Incremental indexing complete: +%d added, ~%d modified, -%d deleted — %d chunks",
+        len(added), len(modified), len(deleted), status.chunks_created,
+    )
+    return rel_paths
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # Endpoints
 # ═════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/index/check-working-tree", response_model=GitCleanlinessResponse)
+async def check_working_tree(body: IndexWorkingTreeRequest) -> GitCleanlinessResponse:
+    """
+    Check whether the project's git working tree is clean enough for indexing.
+
+    Returns a summary of staged, unstaged, and untracked files.
+    """
+    try:
+        git_svc = GitService(body.project_path)
+        result = git_svc.get_working_tree_status()
+        return GitCleanlinessResponse(**result)
+    except Exception as exc:
+        logger.warning("Git status check failed (non-git repo?): %s", exc)
+        return GitCleanlinessResponse(
+            clean=True,
+            has_changes=False,
+            summary="Not a git repository or git is unavailable.",
+        )
+
+
+@router.post("/index/diff-status", response_model=IndexDiffResponse)
+async def index_diff_status(body: IndexDiffRequest) -> IndexDiffResponse:
+    """
+    Preview what an incremental index would change.
+
+    Compares the last indexed commit against HEAD and returns the
+    list of added, modified, and deleted files. If incremental indexing
+    is not possible (no prior index, no git repo, same commit), explains why.
+    """
+    last_sha = _get_last_indexed_commit(body.project_id)
+    if not last_sha:
+        return IndexDiffResponse(
+            incremental_possible=False,
+            message="No prior index history found. A full index is needed.",
+        )
+
+    try:
+        git_svc = GitService(body.project_path)
+    except Exception as exc:
+        return IndexDiffResponse(
+            incremental_possible=False,
+            message=f"Cannot access git repository: {exc}",
+        )
+
+    head_sha = git_svc.get_head_sha()
+    if not head_sha:
+        return IndexDiffResponse(
+            incremental_possible=False,
+            message="Repository has no commits yet.",
+        )
+
+    if head_sha == last_sha:
+        return IndexDiffResponse(
+            commit_sha=head_sha,
+            last_indexed_commit=last_sha,
+            incremental_possible=False,
+            message="Index is up to date with HEAD. No new commits to index.",
+        )
+
+    diff = git_svc.get_diff_between(last_sha, head_sha)
+    added = diff.get("added", [])
+    modified = diff.get("modified", [])
+    deleted = diff.get("deleted", [])
+    renamed = diff.get("renamed", [])
+
+    total = len(added) + len(modified) + len(deleted) + len(renamed)
+
+    return IndexDiffResponse(
+        commit_sha=head_sha,
+        last_indexed_commit=last_sha,
+        added=added,
+        modified=modified + [new for _, new in renamed],
+        deleted=deleted + [old for old, _ in renamed],
+        total_changed=total,
+        incremental_possible=total > 0,
+        message=f"{total} file(s) changed since last index. "
+                f"+{len(added)} added, ~{len(modified) + len(renamed)} modified, -{len(deleted)} deleted."
+                if total > 0
+                else "No changes detected since last index.",
+    )
 
 
 @router.get("/index/estimate/{project_id}", response_model=IndexEstimateResponse)
@@ -771,6 +1045,11 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
     """
     Queue a background indexing job.
 
+    Before queuing, validates:
+      1. The project directory exists.
+      2. The working tree is clean (no staged/unstaged/untracked changes).
+      3. If already indexed and ``force=False``, tries incremental mode.
+
     Returns a ``job_id`` immediately — poll ``/api/index/status/{job_id}``
     for progress. Code becomes searchable within seconds (Phase 1).
     The knowledge graph is rebuilt in the background (Phase 2).
@@ -787,7 +1066,42 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
     if not project_root.exists() or not project_root.is_dir():
         raise HTTPException(404, f"Project path not found: {body.project_path}")
 
-    # Create job
+    # ── Git cleanliness gate ──────────────────────────────────────────
+    git_service: GitService | None = None
+    try:
+        git_service = GitService(body.project_path)
+        status_info = git_service.get_working_tree_status()
+        if not status_info["clean"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Cannot index: working tree has uncommitted changes. "
+                               "Commit or stash them first.",
+                    "staged_files": status_info["staged_files"],
+                    "unstaged_files": status_info["unstaged_files"],
+                    "untracked_files": status_info["untracked_files"],
+                    "summary": status_info["summary"],
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        git_service = None
+
+    # ── Determine incremental vs full ──────────────────────────────────
+    incremental = False
+    diff_info = None
+    last_indexed_commit = ""
+    head_sha = git_service.get_head_sha() if git_service else ""
+
+    if not body.force and head_sha:
+        last_indexed_commit = _get_last_indexed_commit(body.project_id) or ""
+        if last_indexed_commit and last_indexed_commit != head_sha:
+            diff_info = git_service.get_diff_between(last_indexed_commit, head_sha) if git_service else None
+            total_changed = sum(len(v) for v in diff_info.values()) if diff_info else 0
+            incremental = total_changed > 0
+
+    # ── Create job ─────────────────────────────────────────────────────
     job_id = uuid.uuid4().hex[:12]
     jobs: dict[str, IndexStatus] = getattr(request.app.state, "index_jobs", {})
 
@@ -795,28 +1109,29 @@ async def start_indexing(body: IndexRequest, request: Request) -> IndexResponse:
     jobs[job_id] = initial_status
     request.app.state.index_jobs = jobs
 
-    # Collect optional services for Phase 2
     knowledge_graph = getattr(request.app.state, "knowledge_graph", None)
 
-    # Convert filter lists to sets for fast lookup
     ext_filter = set(body.include_extensions) if body.include_extensions else None
     dir_filter = body.include_directories
 
-    # Launch background task
-    asyncio.create_task(
-        _index_project(
-            job_id=job_id,
-            project_id=body.project_id,
-            project_path=body.project_path,
-            force=body.force,
-            embedding_service=embedding,
-            vector_service=vector,
-            jobs=jobs,
-            knowledge_graph=knowledge_graph,
-            include_extensions=ext_filter,
-            include_directories=dir_filter,
-        )
+    # ── Launch background task ─────────────────────────────────────────
+    args = dict(
+        job_id=job_id,
+        project_id=body.project_id,
+        project_path=body.project_path,
+        force=body.force,
+        embedding_service=embedding,
+        vector_service=vector,
+        jobs=jobs,
+        knowledge_graph=knowledge_graph,
+        include_extensions=ext_filter,
+        include_directories=dir_filter,
+        incremental=incremental,
+        diff_info=diff_info,
+        git_service=git_service,
+        last_indexed_commit=last_indexed_commit,
     )
+    asyncio.create_task(_index_project(**args))
 
     return IndexResponse(job_id=job_id)
 

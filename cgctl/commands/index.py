@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import git
 import typer
 from rich.live import Live
 from rich.panel import Panel
@@ -198,6 +199,21 @@ def index_project(
 
     print_header("CodeGuardian Indexing", f"Project: [cyan]{pid}[/cyan]")
     print_info(f"Path: [cyan]{project_path}[/cyan]")
+
+    # ── Git cleanliness check ───────────────────────────────────────────
+    try:
+        repo = git.Repo(project_path, search_parent_directories=True)
+        if repo.is_dirty(untracked_files=True) or bool(repo.index.diff("HEAD")):
+            print_warning("Working tree has uncommitted changes.")
+            print_info(
+                "Run [cyan]cgctl review[/cyan] to review and commit changes first."
+            )
+            if not typer.confirm(
+                "Indexing requires a clean working tree. Continue anyway?"
+            ):
+                raise typer.Exit(0)
+    except (git.InvalidGitRepositoryError, ValueError):
+        pass  # Not a git repo — skip check
 
     # ── Dry run (local file scan, no server needed) ─────────────────────
     if dry_run:

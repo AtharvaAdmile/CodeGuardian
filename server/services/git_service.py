@@ -216,6 +216,158 @@ class GitService:
             logger.warning("Diff generation failed for %s: %s", sha, exc)
             return ""
 
+    # ── Git status and diff (for incremental indexing) ──────────────────
+
+    def get_head_sha(self) -> str:
+        """Return the current HEAD commit SHA, or '' if the repo is empty."""
+        if self._is_empty_repo():
+            return ""
+        try:
+            return self._repo.head.commit.hexsha
+        except (ValueError, GitCommandError):
+            return ""
+
+    def is_working_tree_clean(self) -> bool:
+        """Return True when there are no staged, unstaged, or untracked changes."""
+        if self._is_empty_repo():
+            return True
+        try:
+            return not (
+                self._repo.is_dirty(untracked_files=True)
+                or bool(self._repo.index.diff("HEAD"))
+            )
+        except (GitCommandError, ValueError):
+            return True
+
+    def get_working_tree_status(self) -> dict:
+        """
+        Return a summary of the working tree state.
+
+        Returns:
+            dict with keys:
+              clean (bool), has_changes (bool),
+              staged_files (int), unstaged_files (int),
+              untracked_files (int), summary (str)
+        """
+        if self._is_empty_repo():
+            return {"clean": True, "has_changes": False,
+                    "staged_files": 0, "unstaged_files": 0,
+                    "untracked_files": 0, "summary": "Empty repository."}
+
+        staged = set()
+        unstaged = set()
+        try:
+            staged_statuses = self._repo.git.diff("--cached", "--name-status").splitlines()
+            for line in staged_statuses:
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    staged.add(parts[-1])
+        except GitCommandError:
+            pass
+
+        try:
+            unstaged_statuses = self._repo.git.diff("--name-status").splitlines()
+            for line in unstaged_statuses:
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    unstaged.add(parts[-1])
+        except GitCommandError:
+            pass
+
+        untracked = list(self._repo.untracked_files)
+
+        staged_count = len(staged)
+        unstaged_count = len(unstaged)
+        untracked_count = len(untracked)
+        has_changes = staged_count > 0 or unstaged_count > 0 or untracked_count > 0
+
+        parts = []
+        if staged_count:
+            parts.append(f"{staged_count} staged")
+        if unstaged_count:
+            parts.append(f"{unstaged_count} unstaged")
+        if untracked_count:
+            parts.append(f"{untracked_count} untracked")
+
+        summary = f"{' and '.join(parts)} change(s) detected." if parts else "Working tree is clean."
+
+        return {
+            "clean": not has_changes,
+            "has_changes": has_changes,
+            "staged_files": staged_count,
+            "unstaged_files": unstaged_count,
+            "untracked_files": untracked_count,
+            "summary": summary,
+        }
+
+    def get_diff_between(self, from_sha: str, to_sha: str) -> dict:
+        """
+        Return the list of files changed between two refs.
+
+        Returns:
+            dict with keys:
+              added (list[str]), modified (list[str]),
+              deleted (list[str]), renamed (list[tuple[str, str]])
+        """
+        added: list[str] = []
+        modified: list[str] = []
+        deleted: list[str] = []
+        renamed: list[tuple[str, str]] = []
+
+        if self._is_empty_repo():
+            return {"added": added, "modified": modified,
+                    "deleted": deleted, "renamed": renamed}
+
+        try:
+            raw = self._repo.git.diff(
+                from_sha, to_sha,
+                "--name-status",
+                "--diff-filter=ACMRD",
+            )
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                status = parts[0]
+                if status.startswith("R"):
+                    if len(parts) >= 3:
+                        renamed.append((parts[1], parts[2]))
+                elif status.startswith("A"):
+                    if len(parts) >= 2:
+                        added.append(parts[-1])
+                elif status.startswith("M") or status.startswith("C"):
+                    if len(parts) >= 2:
+                        modified.append(parts[-1])
+                elif status.startswith("D"):
+                    if len(parts) >= 2:
+                        deleted.append(parts[-1])
+        except GitCommandError as exc:
+            logger.warning("git diff between %s..%s failed: %s", from_sha, to_sha, exc)
+
+        return {
+            "added": added,
+            "modified": modified,
+            "deleted": deleted,
+            "renamed": renamed,
+        }
+
+    def get_file_content_at(self, commit_sha: str, file_path: str) -> str | None:
+        """
+        Return the contents of *file_path* as it existed at *commit_sha*.
+
+        Returns None if the file did not exist at that commit or on error.
+        """
+        if self._is_empty_repo():
+            return None
+        try:
+            content = self._repo.git.show(f"{commit_sha}:{file_path}")
+            return content
+        except GitCommandError:
+            logger.debug(
+                "File '%s' not found at commit %s", file_path, commit_sha
+            )
+            return None
+
     # ── Expertise Mapping ────────────────────────────────────────────────
 
     def build_expertise_map(

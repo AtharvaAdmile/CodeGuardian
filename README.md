@@ -1,91 +1,104 @@
-# 🛡️ CodeGuardian
+<div align="center">
 
-> **AI-powered institutional memory for codebases.** A CLI-first tool with an Electron desktop GUI that surfaces engineering context, detects compliance risks, identifies code experts, and generates onboarding paths — all backed by NVIDIA NIM and an MCP server for AI assistant integration.
+# CodeGuardian
 
----
+**AI-powered institutional memory for your codebase**
 
-## Table of Contents
+*Stop reconstructing context. Start shipping with confidence.*
 
-- [Overview](#overview)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [CLI Usage (cgctl)](#cli-usage-cgctl)
-- [Desktop App](#desktop-app)
-- [MCP Server](#mcp-server)
-- [Server Services](#server-services)
-- [LangGraph Agents](#langgraph-agents)
-- [Running Tests](#running-tests)
-- [License](#license)
+<br/>
 
----
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Electron](https://img.shields.io/badge/Electron-28+-47848F?style=flat-square&logo=electron&logoColor=white)](https://electronjs.org)
+[![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://typescriptlang.org)
 
-## Overview
+[![NVIDIA NIM](https://img.shields.io/badge/NVIDIA_NIM-Powered-76b900?style=flat-square&logo=nvidia&logoColor=white)](https://build.nvidia.com)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agents-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-8B5CF6?style=flat-square)](https://modelcontextprotocol.io)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-E76F51?style=flat-square)](https://www.trychroma.com)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-CodeGuardian preserves and surfaces the institutional knowledge behind a codebase — the **why** behind architectural decisions, who owns what, and the blast radius of any change. It indexes your code once and lets developers query that context through a CLI, a desktop app, or directly from their AI assistant via MCP.
+[![Stars](https://img.shields.io/github/stars/AtharvaAdmile/CodeGuardian?style=flat-square&color=gold)](https://github.com/AtharvaAdmile/CodeGuardian/stargazers)
+[![Issues](https://img.shields.io/github/issues/AtharvaAdmile/CodeGuardian?style=flat-square)](https://github.com/AtharvaAdmile/CodeGuardian/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/AtharvaAdmile/CodeGuardian?style=flat-square)](https://github.com/AtharvaAdmile/CodeGuardian/commits)
 
-Everything runs through a central **FastAPI hub on port 8742**. The CLI, the Electron desktop app, and the MCP server are all thin HTTP clients — no LLM or embedding work is done client-side.
+</div>
 
 ---
 
-## Features
+## What is CodeGuardian?
 
-- **CG-pilot Chat** — In-app AI assistant with agentic codebase Q&A, multi-turn conversations, and tool use
-- **Chat Persistence** — All CG-pilot conversations saved to `.codeguardian/chat_history/`; browse and continue previous sessions from the chat history panel or Dashboard "Recent Questions" widget
-- **Context-Aware Chat** — When a file is selected in the File Explorer, its path is automatically attached as context in CG-pilot's input; users can dismiss it per-file
-- **Semantic Q&A** — Ask natural-language questions; get answers grounded in code chunks, architectural decisions, and author expertise
-- **Knowledge Graph** — NetworkX `DiGraph` linking files, functions, decisions, authors, and modules; rebuilt on every index
-- **Impact Analysis** — File Explorer sidebar action that persists LLM-synthesized blast-radius reports per file
-- **Decision Extraction** — LLM parses the last 50 commits to extract and store architectural decisions
-- **Commit Review** — Git history and working-tree review: changed files, diffs, commit readiness, and one-click commit flow
-- **Onboarding Paths** — LangGraph agent converts a plain-text task description into an ordered learning path
-- **Expertise Map** — `git blame` + commit analysis to identify who knows each file best
-- **MCP Integration** — Exposes 9 tools to any MCP-compatible AI assistant (Claude Code, etc.)
-- **Offline-capable CLI** — `--offline` flag bypasses the HTTP layer and imports Python services directly
+Every codebase accumulates invisible knowledge — why that authentication middleware exists, who truly owns the payment module, what breaks if you touch `vector_service.py`. This knowledge lives in developers' heads and Slack threads, not in the code itself.
+
+**CodeGuardian captures and surfaces that institutional memory.** Index your codebase once and get:
+
+- Natural-language answers grounded in actual code, commits, and architecture decisions
+- A knowledge graph of who owns what and how files depend on each other  
+- Compliance scans, blast-radius analysis, and agentic code review — all via a CLI, desktop app, or directly from your AI assistant
+
+Everything routes through a single **FastAPI hub on port 8742**. The CLI, the Electron desktop app, and the MCP server are all thin HTTP clients — no LLM or embedding work happens client-side.
+
+---
+
+## Feature Highlights
+
+| Feature | Description |
+|---------|-------------|
+| **CG-Pilot Chat** | In-app AI assistant with multi-turn conversations, tool use, and context-aware codebase Q&A |
+| **Knowledge Graph** | NetworkX `DiGraph` linking files, functions, decisions, authors, and modules — rebuilt on every index |
+| **Decision Extraction** | LLM parses the last 50 commits to extract and store architectural decisions |
+| **Blast-Radius Analysis** | Identifies which files transitively depend on a changed file and their risk scores |
+| **Expertise Mapping** | `git blame` + commit analysis to rank who knows each file best |
+| **Compliance Scans** | Agentic security scan: secrets, SQL injection, PII, GDPR, HIPAA, dangerous functions |
+| **Code Review Agent** | LangGraph pipeline: security patterns → complexity → blast radius → synthesized report |
+| **Onboarding Paths** | Converts a plain-text task description into an ordered learning path |
+| **Commit Review** | Git history, working-tree diff, commit readiness score, and one-click commit flow |
+| **MCP Integration** | 9 tools exposed to Claude Code, Claude Desktop, or any MCP-compatible assistant |
+| **Offline CLI** | `--offline` flag bypasses HTTP and imports Python services directly |
 
 ---
 
 ## Architecture
 
-All three clients talk exclusively to the FastAPI backend over HTTP. No client touches the database or LLM directly.
-
 ```
 cgctl CLI ──────────────┐
 Desktop Electron App ───┼──→  FastAPI server (:8742) ──→ NVIDIA NIM API
-MCP Server (stdio/SSE) ─┘         │
-                                   ├──→ ChromaDB (local storage)
-                                   └──→ .codeguardian/ (JSON persistence)
+MCP Server (stdio/SSE) ─┘         │                        (LLM + Embeddings)
+                                   │
+                                   ├──→ ChromaDB          (local vector store)
+                                   ├──→ NetworkX Graph     (in-memory + JSON)
+                                   └──→ .codeguardian/     (decisions, chat, impact)
 ```
 
-### Indexing Pipeline (2 phases)
+### Indexing Pipeline
 
-`POST /api/index` starts a background job:
+`POST /api/index` launches a background job. Phase 1 completes fast (code is immediately searchable); Phases 2–4 run concurrently:
 
-| Phase | Work |
-|-------|------|
-| 1 | Walk files → chunk → NIM embeddings (batches of 32) → upsert to ChromaDB |
-| 2 | Rebuild NetworkX knowledge graph from scratch → persist to `.codeguardian/knowledge_graph.json` |
+| Phase | What runs |
+|-------|-----------|
+| **1** | Walk files → AST/regex chunk → NIM embeddings (batches of 32) → upsert ChromaDB |
+| **2** | `git blame` → build author expertise map |
+| **3** | Last 50 commits → LLM extracts architectural decisions → stored in DecisionService |
+| **4** | Rebuild NetworkX knowledge graph → persist to `.codeguardian/knowledge_graph.json` |
 
-Poll progress at `GET /api/index/status/{job_id}`. Phase 1 completes fast (code is immediately searchable); Phase 2 (knowledge graph) runs after.
-
-Poll progress at `GET /api/index/status/{job_id}`.
+Poll progress: `GET /api/index/status/{job_id}`
 
 ---
 
 ## Project Structure
 
 ```
-CG_2/
-├── server/                        # FastAPI backend (the hub)
-│   ├── app.py                     # Application factory + lifespan
-│   ├── config.py                  # Pydantic-settings config
-│   ├── mcp_server.py              # Standalone MCP server (stdio / SSE)
+CodeGuardian/
+├── server/                         # FastAPI backend (the hub)
+│   ├── app.py                      # Application factory + lifespan
+│   ├── config.py                   # Pydantic-settings config
+│   ├── mcp_server.py               # Standalone MCP server (stdio / SSE)
 │   ├── agents/
-│   │   ├── review_agent.py        # LangGraph: security + complexity review
-│   │   └── onboarding_agent.py    # LangGraph: task → learning path
+│   │   ├── review_agent.py         # LangGraph: security + complexity review
+│   │   └── onboarding_agent.py     # LangGraph: task → learning path
 │   ├── routes/
 │   │   ├── health.py
 │   │   ├── indexing.py
@@ -94,100 +107,70 @@ CG_2/
 │   │   ├── analysis_extended.py
 │   │   ├── impact.py
 │   │   ├── review.py
+│   │   ├── compliance.py
 │   │   └── onboarding.py
 │   └── services/
-│       ├── llm_client.py          # NIMClient — sole LLM interface
-│       ├── embedding_service.py   # NIMEmbeddingService (1024-dim)
-│       ├── vector_service.py      # ChromaDB (local storage)
-│       ├── knowledge_graph.py     # NetworkX DiGraph builder
-│       ├── decision_service.py    # Store / retrieve architectural decisions
-│       ├── decision_extractor.py  # LLM extracts decisions from git log
-│       ├── git_service.py         # git blame, log, diff helpers
-│       ├── impact_engine.py       # Blast-radius calculator
-│       └── chat_history_service.py# CG-pilot chat persistence
+│       ├── llm_client.py           # NIMClient — sole LLM interface
+│       ├── embedding_service.py    # NIMEmbeddingService (1024-dim)
+│       ├── vector_service.py       # ChromaDB local vector store
+│       ├── knowledge_graph.py      # NetworkX DiGraph builder
+│       ├── decision_service.py     # Store / retrieve architectural decisions
+│       ├── decision_extractor.py   # LLM extracts decisions from git log
+│       ├── git_service.py          # git blame, log, diff helpers
+│       ├── impact_engine.py        # Blast-radius calculator
+│       └── chat_history_service.py # CG-pilot chat persistence
 │
-├── cgctl/                         # CLI (thin HTTP client)
-│   ├── main.py                    # Typer entry point
-│   ├── client.py                  # CGClient (synchronous httpx)
-│   ├── state.py                   # Global --offline / --api-url state
-│   └── commands/
-│       ├── init.py
-│       ├── index.py
-│       ├── ask.py
-│       ├── context.py
-│       ├── impact.py
-│       ├── review.py
-│       ├── onboard.py
-│       ├── health.py
-│       ├── serve.py
-│       ├── config.py
-│       └── audit.py
+├── cgctl/                          # CLI (thin HTTP client + offline fallback)
+│   ├── main.py                     # Typer entry point
+│   ├── client.py                   # CGClient (synchronous httpx)
+│   ├── state.py                    # Global --offline / --api-url flags
+│   └── commands/                   # index, ask, context, impact, review, onboard…
 │
-├── desktop-app/                   # Electron + React + Vite
-│   ├── electron/main.ts           # Electron main process
+├── desktop-app/                    # Electron + React 18 + Vite + TypeScript
+│   ├── electron/main.ts            # Electron main process + IPC bridge
 │   └── src/
-│       ├── App.tsx                # Router + ProjectContext
-│       ├── pages/                 # Full-page views
-│       │   ├── Dashboard.tsx
-│       │   ├── QnA.tsx
-│       │   ├── KnowledgeGraph.tsx
-│       │   ├── Onboarding.tsx
-│       │   ├── CommitReview.tsx
-│       │   ├── FileExplorer.tsx
-│       │   ├── Indexing.tsx
-│       │   └── Settings.tsx
+│       ├── App.tsx                 # Router + ProjectContext
+│       ├── pages/                  # Dashboard, FileExplorer, KnowledgeGraph,
+│       │                           #   Indexing, Compliance, CommitReview, Settings
 │       ├── components/
-│       │   ├── layout/            # Sidebar, TopBar, CommandPalette
-│       │   └── shared/            # LoadingSpinner, etc.
-│       └── hooks/                 # useProject, API hooks
+│       │   ├── CGPilot.tsx         # Floating AI chat panel
+│       │   ├── layout/             # Sidebar, TopBar, StatusBar, CommandPalette
+│       │   └── shared/             # FileTree, LoadingSpinner, …
+│       └── lib/
+│           ├── api.ts              # All HTTP calls to :8742
+│           └── types.ts            # Shared TypeScript interfaces
 │
-├── tests/                         # pytest test suite
-├── .env.example                   # Environment variable template
-├── requirements.txt
-└── CLAUDE.md                      # AI assistant guidance
+└── tests/                          # pytest suite
 ```
 
 ---
 
-## Prerequisites
+## Quick Start
 
-- Python 3.11+
-- Node.js 18+ and npm (desktop app only)
-- **NVIDIA NIM API Key** — get one at [build.nvidia.com](https://build.nvidia.com)
-- Git (required for expertise mapping and decision extraction)
-
----
-
-## Installation
-
-### 1. Python backend + CLI
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-org/codeguardian.git
-cd codeguardian
+git clone https://github.com/AtharvaAdmile/CodeGuardian.git
+cd CodeGuardian
 
 python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-
+source venv/bin/activate       # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Electron desktop app
+### 2. Configure
 
 ```bash
-cd desktop-app
-npm install
+cp .env.example .env
 ```
 
----
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your values:
+Open `.env` and set at minimum:
 
 ```env
-# NVIDIA NIM (required — all LLM and embedding calls)
+# Required — all LLM and embedding calls
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Optional overrides
 NVIDIA_NIM_BASE_URL=https://integrate.api.nvidia.com/v1
 NVIDIA_LLM_MODEL=qwen/qwen3-coder-480b-a35b-instruct
 NVIDIA_EMBED_MODEL=nvidia/nv-embedqa-e5-v5
@@ -198,97 +181,40 @@ SERVER_PORT=8742
 
 # ChromaDB (local vector store)
 CHROMADB_PERSIST_DIR=./chroma_data
-
-# Logging
-LOG_LEVEL=INFO
 ```
 
----
+Get a free NVIDIA NIM API key at [build.nvidia.com](https://build.nvidia.com).
 
-## CLI Usage (cgctl)
-
-Start the server first (required for all commands except `--offline` mode):
+### 3. Start the server
 
 ```bash
-# Start the server
 python -m cgctl.main serve
-
-# Or with uvicorn directly
+# or
 uvicorn server.app:app --host 0.0.0.0 --port 8742
-
-# Dev mode with auto-reload
-python -m cgctl.main serve --reload
 ```
 
-Global flags available on every command:
-
-```
---offline       Run in offline mode (direct Python imports, no HTTP)
---api-url URL   API server URL (default: http://localhost:8742)
-```
-
-### Commands
-
-#### `cgctl init`
-Initialize a new CodeGuardian project in the current directory.
+### 4. Index a codebase
 
 ```bash
-python -m cgctl.main init
+python -m cgctl.main index /path/to/your/project
 ```
 
-#### `cgctl index`
-Index a codebase into the vector store. Walks `.py`, `.js`, `.ts`, `.jsx`, `.tsx` files. Skips `node_modules`, `__pycache__`, `.git`, `venv`, `dist`, `build`.
-
-```bash
-python -m cgctl.main index /path/to/project
-```
-
-#### `cgctl ask`
-Ask a natural-language question about the indexed codebase.
+### 5. Ask questions
 
 ```bash
 python -m cgctl.main ask "Why is authentication handled in middleware?"
 python -m cgctl.main ask "Who owns the payment module?"
-```
-
-#### `cgctl context`
-Get full context for a specific file: purpose, owners, architectural decisions, and dependents.
-
-```bash
 python -m cgctl.main context server/routes/query.py
-```
-
-#### `cgctl impact`
-Show the blast radius for a changed file — which files transitively depend on it and their risk scores.
-
-```bash
 python -m cgctl.main impact server/services/vector_service.py
 ```
 
-#### `cgctl review`
-Run a multi-stage code review on a file or diff. Checks security patterns, complexity, and blast radius.
+---
 
-```bash
-python -m cgctl.main review server/routes/indexing.py
-python -m cgctl.main review --diff path/to/changes.diff
-```
+## CLI Reference
 
-#### `cgctl onboard`
-Generate an ordered learning path for a developer picking up a new task.
+All commands support `--offline` (direct Python imports, no HTTP) and `--api-url` (custom server URL).
 
-```bash
-python -m cgctl.main onboard "Add rate limiting to the API"
-```
-
-#### `cgctl health`
-Check server health and report which services are active.
-
-```bash
-python -m cgctl.main health
-```
-
-#### `cgctl serve`
-Start the FastAPI server. Optionally run as an MCP server instead.
+### `cgctl serve`
 
 ```bash
 python -m cgctl.main serve               # REST API on :8742
@@ -297,16 +223,64 @@ python -m cgctl.main serve --mcp         # MCP server (stdio)
 python -m cgctl.main serve --mcp-sse     # MCP server (SSE on :8743)
 ```
 
-#### `cgctl config`
-Manage project configuration settings.
+### `cgctl index`
+
+```bash
+python -m cgctl.main index /path/to/project
+```
+
+Walks `.py`, `.js`, `.ts`, `.jsx`, `.tsx` files. Skips `node_modules`, `__pycache__`, `.git`, `venv`, `dist`, `build`.
+
+### `cgctl ask`
+
+```bash
+python -m cgctl.main ask "How does the indexing pipeline work?"
+python -m cgctl.main ask "What changed in the last sprint?"
+```
+
+### `cgctl context`
+
+```bash
+python -m cgctl.main context server/routes/query.py
+```
+
+Returns: file purpose, owners, architectural decisions, and dependent files.
+
+### `cgctl impact`
+
+```bash
+python -m cgctl.main impact server/services/vector_service.py
+```
+
+Returns: transitive dependents, risk scores, and suggested reviewers.
+
+### `cgctl review`
+
+```bash
+python -m cgctl.main review server/routes/indexing.py
+python -m cgctl.main review --diff path/to/changes.diff
+```
+
+### `cgctl onboard`
+
+```bash
+python -m cgctl.main onboard "Add rate limiting to the API"
+```
+
+### `cgctl health`
+
+```bash
+python -m cgctl.main health
+```
+
+### `cgctl config`
 
 ```bash
 python -m cgctl.main config show
 python -m cgctl.main config set KEY VALUE
 ```
 
-#### `cgctl audit`
-Run a code audit across the indexed project.
+### `cgctl audit`
 
 ```bash
 python -m cgctl.main audit
@@ -316,55 +290,42 @@ python -m cgctl.main audit
 
 ## Desktop App
 
-The desktop app is an Electron + React + Vite application. It communicates with the FastAPI server over HTTP — no direct Python or database access from the renderer.
+A Material-TUI dark-theme Electron app with a full IDE-style layout.
 
 ### Running
 
 ```bash
-# Requires server running on :8742
+# Server must be running on :8742 first
 cd desktop-app
-npm run dev          # Vite + Electron in development mode
+npm install
+npm run dev          # Vite + Electron (development)
 npm run build        # Production build
-npm run typecheck    # TypeScript type check
+npm run typecheck    # TypeScript check
 ```
 
 ### Pages
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Dashboard | Project overview, health status, recent questions from CG-pilot |
-| `/ask` | Q&A | Natural-language query interface with source citations |
+| `/` | Dashboard | Project overview, recent CG-Pilot queries, git activity log |
 | `/graph` | Knowledge Graph | D3.js interactive graph of files, functions, decisions, authors |
-| `/impact` | Redirect | Opens File Explorer, where impact analysis lives in the file context sidebar |
-| `/onboard` | Onboarding | Learning path generator for new tasks |
-| `/review` | Commit Review | Git history, current changes, commit summary, and commit action |
-| `/files` | File Explorer | Browse indexed files, file context, and persisted impact analysis |
-| `/indexing` | Indexing | Kick off and monitor index jobs |
-| `/settings` | Settings | Server URL, project configuration |
+| `/files` | File Explorer | Browse files with context sidebar and persisted impact analysis |
+| `/indexing` | Indexing | Configure, launch, and monitor index jobs with live log stream |
+| `/compliance` | Compliance | Agentic compliance scanner with real-time reasoning timeline |
+| `/review` | Commit Review | Working-tree diff, commit history, and one-click commit action |
+| `/settings` | Settings | Server URL, project path, preferences |
 
-CG-pilot is accessible from any page via the chat bubble button in the bottom-right corner.
-
-### Architecture
-
-```
-Electron main process (electron/main.ts)
-    └── exposes window.cgctl IPC bridge (selectDirectory, listFiles, readFile, etc.)
-
-React renderer (src/)
-    ├── BrowserRouter with 9 page routes
-    ├── ProjectContext — tracks active project, health, index status, selected file path
-    └── HTTP calls → FastAPI :8742 (no direct DB or LLM access)
-```
+**CG-Pilot** is available on every page via the `>_ CG-PILOT` button in the bottom-right corner.
 
 ---
 
-## MCP Server
+## MCP Integration
 
-The MCP server exposes CodeGuardian's capabilities as tools to any MCP-compatible AI assistant. It is a thin HTTP proxy — all tools delegate to the FastAPI server on `:8742`.
+CodeGuardian exposes a full MCP server so AI assistants can query your codebase directly.
 
-### Setup
+### Setup for Claude Code
 
-Add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
+Add to `~/.claude/mcp_servers.json`:
 
 ```json
 {
@@ -372,93 +333,115 @@ Add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
     "codeguardian": {
       "command": "python",
       "args": ["-m", "server.mcp_server"],
-      "cwd": "/path/to/codeguardian"
+      "cwd": "/path/to/CodeGuardian"
     }
   }
 }
 ```
 
-### Transport modes
+### Transport options
 
 ```bash
-python -m server.mcp_server              # stdio (default, for Claude Code)
-python -m server.mcp_server --sse        # SSE on :8743
-python -m server.mcp_server --sse --port 9000   # custom port
+python -m server.mcp_server                    # stdio (default)
+python -m server.mcp_server --sse              # SSE on :8743
+python -m server.mcp_server --sse --port 9000  # custom port
 ```
 
 ### Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `query_codebase` | Ask any natural-language question; returns answer with sources, decisions, and experts |
-| `get_context_for_file` | Full context for a file: purpose, owners, decisions, dependents |
-| `get_decision_history` | All architectural decisions affecting a file, plus git commit timeline |
-| `get_expertise` | Who knows a file best: ranked contributors with commit counts and ownership % |
+| `query_codebase` | Natural-language Q&A with source citations, decisions, and expert contacts |
+| `get_context_for_file` | Purpose, owners, architectural decisions, and dependents for any file |
+| `get_decision_history` | All architectural decisions affecting a file + git timeline |
+| `get_expertise` | Ranked contributors with commit counts and ownership percentage |
 | `analyze_impact` | Blast-radius report: transitive dependents, risk scores, suggested reviewers |
-| `review_code` | Multi-stage review: security, complexity, patterns, impact |
-| `check_compliance` | Security and compliance scan only (secrets, SQL injection, PII logging) |
+| `review_code` | Full review: security patterns, complexity, blast radius, synthesized findings |
+| `check_compliance` | Security scan: secrets, SQL injection, PII, GDPR, HIPAA, dangerous functions |
 | `generate_onboarding_path` | Ordered learning path for a developer picking up a new task |
 | `check_breaking_changes` | AST-based detection of removed functions, added required params, changed signatures |
 
 ---
 
-## Server Services
+## LangGraph Agents
 
-All services are initialized on `app.state` during startup and are `None` if their prerequisites are missing. Every feature degrades gracefully.
+### ReviewAgent
 
-| Service | File | Role |
-|---------|------|------|
-| `NIMClient` | `services/llm_client.py` | Sole LLM interface — raw `httpx` against NVIDIA NIM's OpenAI-compatible endpoint. Retry: 429 → exponential backoff, 5xx → 1 retry, timeout → 1 retry |
-| `NIMEmbeddingService` | `services/embedding_service.py` | 1024-dimensional embeddings from `nvidia/nv-embedqa-e5-v5` |
-| `VectorService` | `services/vector_service.py` | ChromaDB (local only). Vector IDs are deterministic `SHA256(project_id + file_path + chunk_index)` |
-| `KnowledgeGraph` | `services/knowledge_graph.py` | NetworkX `DiGraph` with node types: `file`, `function`, `decision`, `author`, `module`. Always rebuilt from scratch on index. Persisted to `.codeguardian/knowledge_graph.json` |
-| `DecisionService` | `services/decision_service.py` | Store and retrieve architectural decisions extracted from git history |
-| `DecisionExtractor` | `services/decision_extractor.py` | LLM parses the last 50 commits to extract structured decisions |
-| `GitService` | `services/git_service.py` | `git blame`, `git log`, `git diff` helpers; initialized per-project when an index job runs |
-| `ImpactEngine` | `services/impact_engine.py` | Traverses the knowledge graph to compute blast-radius reports |
-| `ChatHistoryService` | `services/chat_history_service.py` | Persists CG-pilot chat sessions to `.codeguardian/chat_history/` JSON |
+Pipeline: `parse_input → pattern_check → impact_analysis → security_scan → synthesize`
+
+- Checks naming, error handling, and logging consistency vs similar functions in the codebase
+- Detects hardcoded secrets, SQL injection, path traversal, PII logging
+- Attaches blast-radius data from the knowledge graph
+- LLM synthesizes all findings into a ranked `ReviewReport`
+
+### OnboardingAgent
+
+Pipeline: `parse_task → find_relevant_code → gather_context → generate_path`
+
+Converts a plain-text task description into an ordered, numbered learning path enriched with architectural decisions and expert contacts from the knowledge graph.
 
 ---
 
-## LangGraph Agents
+## Server Services
 
-Two agents are built with LangGraph and live in `server/agents/`.
+All services live on `app.state`. They are `None` if prerequisites (e.g., `NVIDIA_NIM_API_KEY`) are absent — every feature degrades gracefully.
 
-### ReviewAgent (`agents/review_agent.py`)
-
-Linear pipeline: `parse_input → pattern_check → impact_analysis → security_scan → synthesize`
-
-- **pattern_check** — checks naming, error handling, and logging consistency vs similar functions in the codebase
-- **security_scan** — detects hardcoded secrets, SQL injection, path traversal, PII in logs
-- **impact_analysis** — uses `ImpactEngine` to attach blast-radius data to the report
-- **synthesize** — LLM combines all findings into a ranked `ReviewReport`
-
-### OnboardingAgent (`agents/onboarding_agent.py`)
-
-Linear pipeline: `parse_task → find_relevant_code → gather_context → generate_path`
-
-Converts a plain-text task description into an ordered, numbered learning path enriched with architectural decisions and expert contacts from the knowledge graph.
+| Service | Role |
+|---------|------|
+| `NIMClient` | Sole LLM interface — raw `httpx` against NVIDIA NIM. Retry: 429 → exponential backoff (1s × 2ⁿ + jitter, max 3); 5xx → 1 retry after 2s; timeout → 1 retry at 90s |
+| `NIMEmbeddingService` | 1024-dimensional embeddings from `nvidia/nv-embedqa-e5-v5` |
+| `VectorService` | ChromaDB local store. IDs are deterministic `SHA256(project_id + file_path + chunk_index)` |
+| `KnowledgeGraph` | NetworkX `DiGraph` — node types: `file`, `function`, `decision`, `author`, `module`. Always rebuilt from scratch on index |
+| `DecisionService` | Store and retrieve architectural decisions. Limits to 1000 most recent to prevent memory issues |
+| `DecisionExtractor` | LLM parses the last 50 commits to extract structured `ArchitecturalDecision` objects |
+| `GitService` | `git blame`, `git log`, `git diff` helpers |
+| `ImpactEngine` | Traverses the knowledge graph to compute transitive blast-radius reports |
+| `ChatHistoryService` | Persists CG-Pilot sessions to `.codeguardian/chat_history/` |
 
 ---
 
 ## Running Tests
 
 ```bash
-# All tests
-pytest
-
-# Single file
-pytest tests/test_decision_service.py
-
-# Filter by name
-pytest tests/ -k "test_embedding"
-
-# Async tests
-pytest --asyncio-mode=auto
+pytest                                    # All tests
+pytest tests/test_decision_service.py    # Single file
+pytest tests/ -k "test_embedding"        # Filter by name
+pytest --asyncio-mode=auto               # Async tests
 ```
+
+---
+
+## Hard Rules
+
+A few invariants the codebase enforces strictly:
+
+- All LLM calls go through `server/services/llm_client.py` — no OpenAI SDK, no Ollama
+- All embeddings are 1024-dimensional from NIM — no sentence-transformers, no torch
+- Vector IDs are deterministic SHA256 — same ID in ChromaDB every time
+- Knowledge graph is always rebuilt from scratch on index — never incrementally patched
+- Supabase (pgvector) is always optional — every feature works ChromaDB-only
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Commit your changes following the existing commit style
+4. Open a pull request with a clear description
+
+Please open an issue before starting work on large changes.
 
 ---
 
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+
+Built with [NVIDIA NIM](https://build.nvidia.com) · [FastAPI](https://fastapi.tiangolo.com) · [LangGraph](https://langchain-ai.github.io/langgraph/) · [Electron](https://electronjs.org)
+
+</div>

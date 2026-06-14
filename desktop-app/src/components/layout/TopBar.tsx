@@ -1,5 +1,5 @@
-import { Search, X } from "lucide-react";
-import { StatusDot } from "../shared/Badge";
+import { useNavigate } from "react-router-dom";
+import { Terminal, Settings, Power } from "lucide-react";
 import type { HealthStatus, IndexStatus } from "../../lib/types";
 
 interface TopBarProps {
@@ -12,60 +12,66 @@ interface TopBarProps {
 
 export function TopBar({
   projectName,
-  healthStatus,
   indexStatus,
   onCommandPaletteOpen,
   onClearProject,
 }: TopBarProps) {
-  const serverStatus = healthStatus?.status || "unhealthy";
+  const navigate = useNavigate();
   const isIndexing = indexStatus?.status === "running";
 
   return (
-    <header className="h-14 bg-bg-secondary border-b border-border flex items-center justify-between px-4">
-      <div className="flex items-center gap-3">
-        {projectName && (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="text-accent-blue font-semibold">CodeGuardian</span>
-              <span className="text-text-muted">/</span>
-              <span className="text-text-primary font-medium">{projectName}</span>
-            </div>
-            {isIndexing && (
-              <div className="flex items-center gap-2 px-2 py-1 bg-accent-blue/10 rounded-full">
-                <StatusDot status="running" size="sm" />
-                <span className="text-xs text-accent-blue">
-                  Indexing {indexStatus.files_processed}/{indexStatus.files_total} files
-                </span>
-              </div>
-            )}
-          </>
-        )}
+    <header className="h-14 bg-surface-container-low border-b border-outline-variant flex items-center px-4 gap-4 shrink-0 font-mono">
+      {/* Left: brand + project path */}
+      <div className="shrink-0 min-w-[140px]">
+        <div className="text-primary font-bold text-sm tracking-wide leading-tight">CODEGUARDIAN</div>
+        <div className="text-[11px] text-on-surface-variant leading-tight mt-0.5">
+          root@local:{projectName ? `/${projectName}` : "~"}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      {/* Center: fake command-palette trigger */}
+      <div className="flex-1 max-w-lg mx-auto">
         <button
           onClick={onCommandPaletteOpen}
-          className="flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary border border-border rounded-lg text-text-muted hover:text-text-primary hover:border-text-muted transition-colors"
+          className="w-full flex items-center gap-2 px-3 py-1.5 border border-outline-variant bg-surface-container text-on-surface-variant text-[12px] hover:border-outline transition-colors"
         >
-          <Search className="w-4 h-4" />
-          <span className="text-sm">Search...</span>
-          <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-xs bg-bg-hover rounded">
+          <span className="text-primary shrink-0 text-[11px]">&gt;</span>
+          <span className="flex-1 text-left tracking-wider">QUERY_DB_</span>
+          {isIndexing ? (
+            <span className="text-tertiary text-[10px] animate-pulseFast shrink-0 uppercase">INDEXING...</span>
+          ) : (
+            <span className="text-primary cursor-blink shrink-0">█</span>
+          )}
+          <kbd className="hidden sm:inline text-[10px] text-outline border border-outline-variant px-1 ml-1 shrink-0">
             ⌘K
           </kbd>
         </button>
+      </div>
 
-        {projectName && (
-          <button
-            onClick={onClearProject}
-            className="p-2 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-colors"
-            title="Close project"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        )}
-
-        <div className="flex items-center gap-2 px-2">
-          <StatusDot status={serverStatus as "healthy" | "degraded" | "unhealthy"} />
+      {/* Right: icon buttons + avatar */}
+      <div className="shrink-0 flex items-center gap-1 ml-auto">
+        <button
+          className="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
+          title="Terminal"
+        >
+          <Terminal className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => navigate("/settings")}
+          className="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
+          title="Settings"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onClearProject}
+          className="p-1.5 text-on-surface-variant hover:text-error hover:bg-surface-container-high transition-colors"
+          title="Close project"
+        >
+          <Power className="w-4 h-4" />
+        </button>
+        <div className="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center text-[11px] font-bold ml-1 shrink-0">
+          AT
         </div>
       </div>
     </header>

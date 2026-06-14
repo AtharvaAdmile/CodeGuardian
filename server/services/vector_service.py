@@ -194,6 +194,23 @@ class VectorService:
             )
             return 0
 
+    def get_indexed_file_count(self, project_id: str) -> int:
+        """Return the number of unique file paths indexed in ChromaDB."""
+        collection_name = f"cg_{project_id}"
+        try:
+            collection = self._chroma_client.get_collection(name=collection_name)
+            results = collection.get(include=["metadatas"])
+            metadatas = results.get("metadatas", [])
+            if not metadatas:
+                return 0
+            unique_files: set[str] = set()
+            for m in metadatas:
+                if m and "file_path" in m:
+                    unique_files.add(m["file_path"])
+            return len(unique_files)
+        except Exception:
+            return 0
+
     async def delete_project(self, project_id: str) -> None:
         """Delete all vectors for a project from ChromaDB."""
         collection_name = f"cg_{project_id}"

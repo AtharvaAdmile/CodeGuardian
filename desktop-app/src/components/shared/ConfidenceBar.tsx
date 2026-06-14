@@ -7,27 +7,24 @@ interface ConfidenceBarProps {
 }
 
 export function ConfidenceBar({ score, showLabel = true, size = "md" }: ConfidenceBarProps) {
-  const clampedScore = Math.max(0, Math.min(1, score));
-  const percentage = Math.round(clampedScore * 100);
-  const color = getHealthColor(clampedScore);
+  const clamped = Math.max(0, Math.min(1, score));
+  const pct = Math.round(clamped * 100);
+  const color = getHealthColor(clamped);
 
-  const heightClasses = {
-    sm: "h-1",
-    md: "h-2",
-    lg: "h-3",
-  };
+  // ASCII bar: total 20 chars
+  const total  = size === "sm" ? 12 : size === "lg" ? 24 : 16;
+  const filled = Math.round((pct / 100) * total);
+  const empty  = total - filled;
+  const bar    = "█".repeat(filled) + "░".repeat(empty);
 
   return (
-    <div className="flex items-center gap-2">
-      <div className={`flex-1 bg-bg-tertiary rounded-full overflow-hidden ${heightClasses[size]}`}>
-        <div
-          className="h-full rounded-full transition-all duration-300"
-          style={{ width: `${percentage}%`, backgroundColor: color }}
-        />
-      </div>
+    <div className="flex items-center gap-2 font-mono">
+      <span className="text-xs" style={{ color }}>
+        [{bar}]
+      </span>
       {showLabel && (
-        <span className="text-xs font-mono" style={{ color }}>
-          {percentage}%
+        <span className="text-[10px]" style={{ color }}>
+          {pct}%
         </span>
       )}
     </div>

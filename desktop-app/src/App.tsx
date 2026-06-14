@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useProject } from "./hooks/useProject";
 import { Sidebar } from "./components/layout/Sidebar";
 import { TopBar } from "./components/layout/TopBar";
+import { StatusBar } from "./components/layout/StatusBar";
 import { CommandPalette } from "./components/layout/CommandPalette";
 import { LoadingSpinner } from "./components/shared/LoadingSpinner";
 import { CGPilot } from "./components/CGPilot";
@@ -56,16 +57,31 @@ function LoadingPage() {
 function LandingPage({ onSelectProject }: { onSelectProject: () => void }) {
   return (
     <div className="h-screen flex items-center justify-center bg-bg-primary">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-accent-blue to-text-secondary bg-clip-text text-transparent">
-          CodeGuardian
-        </h1>
-        <p className="text-text-secondary mb-8">Select a project directory to begin analysis</p>
+      <div className="text-center space-y-6 px-8">
+        <pre className="text-accent-green text-xs leading-tight glow-strong select-none">
+{`  ██████╗ ██████╗  ██████╗ ███████╗
+ ██╔════╝██╔════╝ ██╔════╝ ██╔════╝
+ ██║     ██║  ███╗██║  ███╗███████╗
+ ██║     ██║   ██║██║   ██║╚════██║
+ ╚██████╗╚██████╔╝╚██████╔╝███████║
+  ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝`}
+        </pre>
+        <div className="text-text-secondary text-xs uppercase tracking-widest">
+          INSTITUTIONAL MEMORY SYSTEM v1.0.0
+        </div>
+        <div className="border border-border p-4 text-left text-sm space-y-1 max-w-sm mx-auto">
+          <div className="text-text-muted">// SYSTEM READY</div>
+          <div className="text-text-secondary">$ awaiting project path...</div>
+          <div className="flex items-center gap-2 text-accent-green">
+            <span>&gt;</span>
+            <span className="cursor-block">SELECT DIRECTORY TO INITIALIZE</span>
+          </div>
+        </div>
         <button
           onClick={onSelectProject}
-          className="px-6 py-3 bg-accent-blue hover:bg-accent-blue/80 text-white rounded-lg font-medium transition-colors"
+          className="px-6 py-2.5 border border-accent-green text-accent-green hover:bg-accent-green hover:text-bg-primary transition-colors text-sm uppercase tracking-widest hover-glitch"
         >
-          Open Project
+          [ OPEN PROJECT ]
         </button>
       </div>
     </div>
@@ -120,6 +136,7 @@ function AppContent() {
   if (!projectPath) {
     return (
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <div id="crt-overlay" aria-hidden="true" />
         <LandingPage onSelectProject={handleSelectClick} />
       </BrowserRouter>
     );
@@ -142,8 +159,10 @@ function AppContent() {
           setSelectedFilePath,
         }}
       >
-        <div className="flex h-screen bg-bg-primary">
-          <Sidebar healthStatus={healthStatus} />
+        <div id="crt-overlay" aria-hidden="true" />
+        <div className="scanline-effect" aria-hidden="true" />
+        <div className="flex h-screen bg-surface">
+          <Sidebar healthStatus={healthStatus} onClearProject={handleClearProject} />
           <div className="flex-1 flex flex-col overflow-hidden">
             <TopBar
               projectName={projectName}
@@ -152,7 +171,7 @@ function AppContent() {
               onCommandPaletteOpen={handleCommandPaletteOpen}
               onClearProject={handleClearProject}
             />
-            <main className="flex-1 overflow-auto">
+            <main className="flex-1 overflow-auto pb-7">
               <Suspense fallback={<LoadingPage />}>
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
@@ -181,6 +200,10 @@ function AppContent() {
               onClearPendingSession={() => setPendingSessionId(null)}
             />
           )}
+          <StatusBar
+            projectName={projectName}
+            isIndexing={indexStatus?.status === "running"}
+          />
         </div>
       </ProjectContext.Provider>
     </BrowserRouter>

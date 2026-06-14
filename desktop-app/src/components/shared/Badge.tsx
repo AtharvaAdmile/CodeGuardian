@@ -1,27 +1,35 @@
-
-
 interface BadgeProps {
   variant?: "default" | "success" | "warning" | "error" | "info";
   size?: "sm" | "md";
   children: React.ReactNode;
 }
 
+const VARIANT_CLASSES: Record<string, string> = {
+  default: "text-text-muted border-border",
+  success: "text-accent-green border-accent-green",
+  warning: "text-accent-amber border-accent-amber",
+  error:   "text-accent-red   border-accent-red",
+  info:    "text-accent-cyan  border-accent-cyan",
+};
+
+const VARIANT_GLOW: Record<string, string> = {
+  default: "",
+  success: "drop-shadow-[0_0_4px_rgba(51,255,0,0.5)]",
+  warning: "drop-shadow-[0_0_4px_rgba(255,176,0,0.5)]",
+  error:   "drop-shadow-[0_0_4px_rgba(255,51,51,0.5)]",
+  info:    "drop-shadow-[0_0_4px_rgba(0,255,255,0.5)]",
+};
+
 export function Badge({ variant = "default", size = "md", children }: BadgeProps) {
-  const baseClasses = "inline-flex items-center font-medium rounded-full";
-  
-  const sizeClasses = size === "sm" ? "px-2 py-0.5 text-xs" : "px-2.5 py-1 text-sm";
-  
-  const variantClasses: Record<string, string> = {
-    default: "bg-bg-tertiary text-text-secondary border border-border",
-    success: "bg-accent-green/20 text-accent-green border border-accent-green/30",
-    warning: "bg-accent-amber/20 text-accent-amber border border-accent-amber/30",
-    error: "bg-accent-red/20 text-accent-red border border-accent-red/30",
-    info: "bg-accent-blue/20 text-accent-blue border border-accent-blue/30",
-  };
+  const sizeClass = size === "sm" ? "text-[10px] px-1 py-px" : "text-xs px-1.5 py-0.5";
+  const colors = VARIANT_CLASSES[variant] ?? VARIANT_CLASSES.default;
+  const glow   = VARIANT_GLOW[variant] ?? "";
 
   return (
-    <span className={`${baseClasses} ${sizeClasses} ${variantClasses[variant]}`}>
-      {children}
+    <span
+      className={`inline-flex items-center border font-mono uppercase tracking-wider ${sizeClass} ${colors} ${glow}`}
+    >
+      [{children}]
     </span>
   );
 }
@@ -31,37 +39,48 @@ interface StatusDotProps {
   size?: "sm" | "md" | "lg";
 }
 
+const STATUS_CHAR: Record<string, string> = {
+  healthy:   "[OK]",
+  degraded:  "[WARN]",
+  unhealthy: "[ERR]",
+  running:   "[...]",
+  completed: "[OK]",
+  failed:    "[ERR]",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  healthy:   "text-accent-green",
+  degraded:  "text-accent-amber",
+  unhealthy: "text-accent-red",
+  running:   "text-accent-green animate-blink",
+  completed: "text-accent-green",
+  failed:    "text-accent-red",
+};
+
+const STATUS_SIZE: Record<string, string> = {
+  sm: "text-[9px]",
+  md: "text-[10px]",
+  lg: "text-xs",
+};
+
 export function StatusDot({ status, size = "md" }: StatusDotProps) {
-  const sizeClasses = {
-    sm: "w-2 h-2",
-    md: "w-2.5 h-2.5",
-    lg: "w-3 h-3",
-  };
-
-  const colorClasses: Record<string, string> = {
-    healthy: "bg-accent-green",
-    degraded: "bg-accent-amber",
-    unhealthy: "bg-accent-red",
-    running: "bg-accent-blue animate-pulse",
-    completed: "bg-accent-green",
-    failed: "bg-accent-red",
-  };
-
   return (
-    <span className={`${sizeClasses[size]} ${colorClasses[status]} rounded-full inline-block`} />
+    <span className={`font-mono ${STATUS_SIZE[size]} ${STATUS_COLOR[status]}`}>
+      {STATUS_CHAR[status]}
+    </span>
   );
 }
 
 export function SeverityBadge({ severity }: { severity: string }) {
   const variantMap: Record<string, BadgeProps["variant"]> = {
     critical: "error",
-    high: "error",
-    medium: "warning",
-    low: "default",
+    high:     "error",
+    medium:   "warning",
+    low:      "default",
   };
 
   return (
-    <Badge variant={variantMap[severity] || "default"} size="sm">
+    <Badge variant={variantMap[severity] ?? "default"} size="sm">
       {severity.toUpperCase()}
     </Badge>
   );

@@ -197,7 +197,7 @@ async def analyze_health(body: HealthRequest) -> HealthResponse:
         elif total_commits > 50:
             health_score -= 1.0
 
-        health_score = max(0.0, min(10.0, health_score))
+        health_score = max(0.0, min(10.0, health_score)) / 10.0
         is_hotspot = avg_cc > 10 and total_commits > 30
 
         recommendation: dict = {}

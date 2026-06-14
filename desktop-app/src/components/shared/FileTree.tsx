@@ -1,6 +1,4 @@
 import { useState } from "react";
-import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
-import { getHealthColor } from "../../lib/constants";
 import type { FileNode } from "../../lib/types";
 
 interface FileTreeProps {
@@ -9,79 +7,87 @@ interface FileTreeProps {
   selectedPath?: string;
 }
 
-interface FileTreeNodeProps {
+function FileTreeNode({
+  node,
+  isLast,
+  prefix,
+  depth = 0,
+  onFileSelect,
+  selectedPath,
+}: {
   node: FileNode;
-  depth: number;
+  isLast: boolean;
+  prefix: string;
+  depth?: number;
   onFileSelect?: (file: FileNode) => void;
   selectedPath?: string;
-}
-
-function FileTreeNode({ node, depth, onFileSelect, selectedPath }: FileTreeNodeProps) {
+}) {
   const [isExpanded, setIsExpanded] = useState(depth < 2);
   const isSelected = selectedPath === node.path;
 
-  const handleClick = () => {
-    if (node.type === "directory") {
-      setIsExpanded(!isExpanded);
-    } else {
-      onFileSelect?.(node);
-    }
-  };
-
-  const Icon = node.type === "directory"
-    ? (isExpanded ? FolderOpen : Folder)
-    : File;
-
-  const healthColor = node.health !== undefined ? getHealthColor(node.health) : null;
+  const connector = isLast ? "└── " : "├── ";
+  const childPrefix = prefix + (isLast ? "    " : "│   ");
 
   return (
     <div>
       <div
-        className={`
-          flex items-center gap-1.5 py-1 px-2 cursor-pointer rounded
-          ${isSelected ? "bg-accent-blue/20 text-accent-blue" : "hover:bg-bg-hover text-text-primary"}
-        `}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        onClick={handleClick}
+        className={`flex items-baseline font-mono text-[12px] leading-6 cursor-pointer transition-colors select-none ${
+          isSelected
+            ? "bg-secondary text-on-secondary"
+            : "hover:bg-surface-container-high"
+        }`}
+        onClick={() => {
+          if (node.type === "directory") setIsExpanded(!isExpanded);
+          else onFileSelect?.(node);
+        }}
       >
-        {node.type === "directory" && (
-          <ChevronRight
-            className={`w-3 h-3 text-text-muted transition-transform ${isExpanded ? "rotate-90" : ""}`}
-          />
-        )}
-        <Icon className="w-4 h-4 text-text-muted" />
-        <span className="text-sm truncate flex-1">{node.name}</span>
-        {node.type === "file" && healthColor && (
-          <span
-            className="w-2 h-2 rounded-full"
-            style={{ backgroundColor: healthColor }}
-          />
-        )}
+        <span
+          className={`shrink-0 whitespace-pre ${
+            isSelected ? "text-on-secondary/50" : "text-on-surface-variant/40"
+          }`}
+        >
+          {prefix}{connector}
+        </span>
+        <span
+          className={
+            isSelected
+              ? "font-bold"
+              : node.type === "directory"
+              ? "text-primary"
+              : "text-on-surface"
+          }
+        >
+          {node.name}
+          {node.type === "directory" && "/"}
+        </span>
       </div>
-      {node.type === "directory" && isExpanded && node.children && (
-        <div>
-          {node.children.map((child) => (
-            <FileTreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              onFileSelect={onFileSelect}
-              selectedPath={selectedPath}
-            />
-          ))}
-        </div>
-      )}
+      {node.type === "directory" &&
+        isExpanded &&
+        node.children?.map((child, i) => (
+          <FileTreeNode
+            key={child.id}
+            node={child}
+            isLast={i === node.children!.length - 1}
+            prefix={childPrefix}
+            depth={depth + 1}
+            onFileSelect={onFileSelect}
+            selectedPath={selectedPath}
+          />
+        ))}
     </div>
   );
 }
 
 export function FileTree({ files, onFileSelect, selectedPath }: FileTreeProps) {
   return (
-    <div className="font-mono text-sm">
-      {files.map((file) => (
+    <div className="font-mono text-[12px] leading-6">
+      <div className="text-secondary select-none">.</div>
+      {files.map((file, i) => (
         <FileTreeNode
           key={file.id}
           node={file}
+          isLast={i === files.length - 1}
+          prefix=""
           depth={0}
           onFileSelect={onFileSelect}
           selectedPath={selectedPath}

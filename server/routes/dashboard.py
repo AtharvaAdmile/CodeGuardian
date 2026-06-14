@@ -3,17 +3,16 @@ Dashboard routes — aggregated project metrics for the Dashboard UI.
 
 GET /api/dashboard/{project_path}  → returns computed metrics:
   - Files indexed (from vector store count or indexing status)
-  - Avg health score (from knowledge graph file health)
+  - Last indexed at (timestamp from index history)
+  - Recent commits (from git service)
   - Hotspots (files with health_score < 0.5)
   - Graph stats (nodes, edges from knowledge graph)
-  - Decisions count (from decision service, 0 if none)
-  - Expert count (from KG author nodes, 0 if none)
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,11 +22,29 @@ logger = logging.getLogger("codeguardian.routes.dashboard")
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
-_SKIP_DIRS = frozenset(
-    {"node_modules", "__pycache__", ".git", "venv", ".venv", "dist", "build",
-     "chroma_data", "generated_test_cases", ".codeguardian", "coverage"}
-)
-_VALID_EXTENSIONS = frozenset({".py", ".js", ".ts", ".jsx", ".tsx"})
+_HISTORY_DIR = ".codeguardian/index_history"
+
+
+def _load_last_index_history(project_id: str) -> dict | None:
+    """Load the most recent index history entry for a project."""
+    path = Path(_HISTORY_DIR) / f"{project_id}.json"
+    if not path.exists():
+        return None
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+        if entries:
+            return entries[-1]
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+class RecentCommit(BaseModel):
+    sha: str
+    message: str
+    author: str
+    date: str
+    files_changed: list[str] = Field(default_factory=list)
 
 
 class DashboardHotspot(BaseModel):
@@ -48,12 +65,11 @@ class RecentQuestion(BaseModel):
 class DashboardResponse(BaseModel):
     project_path: str
     files_indexed: int = 0
-    decisions_count: int = 0
-    avg_health_score: float = 0.0
-    expertise_count: int = 0
-    hotspots: list[DashboardHotspot] = Field(default_factory=list)
     graph_nodes: int = 0
     graph_edges: int = 0
+    last_indexed_at: str | None = None
+    hotspots: list[DashboardHotspot] = Field(default_factory=list)
+    recent_commits: list[RecentCommit] = Field(default_factory=list)
     is_indexing: bool = False
     index_status: str = ""
     index_job_id: str | None = None
@@ -61,40 +77,20 @@ class DashboardResponse(BaseModel):
     error: str | None = None
 
 
-def _count_source_files(project_path: str) -> int:
-    """Count source files in the project directory."""
-    count = 0
-    root = Path(project_path)
-    if not root.exists():
-        return 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
-        for fname in filenames:
-            if Path(fname).suffix.lower() in _VALID_EXTENSIONS:
-                count += 1
-    return count
-
-
 @router.get("/{project_path:path}", response_model=DashboardResponse)
 async def get_dashboard_metrics(project_path: str, request: Request) -> DashboardResponse:
     """
-    Aggregate metrics from knowledge_graph and index status for the dashboard.
-
-    Returns comprehensive project health metrics including:
-    - Total files indexed (from vector store)
-    - Average health score (from knowledge graph)
-    - Hotspots (files with health score < 0.5)
-    - Knowledge graph stats (nodes, edges)
+    Aggregate metrics from knowledge_graph, git, and index status for the dashboard.
     """
     pp = Path(project_path)
     if not pp.exists() or not pp.is_dir():
         raise HTTPException(404, f"Project path not found: {project_path}")
 
     result = DashboardResponse(project_path=project_path)
+    project_id = pp.name
 
     try:
         knowledge_graph = getattr(request.app.state, "knowledge_graph", None)
-        decision_service = getattr(request.app.state, "decision_service", None)
         index_jobs: dict = getattr(request.app.state, "index_jobs", {})
 
         if knowledge_graph and not knowledge_graph.is_empty():
@@ -102,42 +98,22 @@ async def get_dashboard_metrics(project_path: str, request: Request) -> Dashboar
             result.graph_nodes = stats.get("total_nodes", 0)
             result.graph_edges = stats.get("total_edges", 0)
 
-            expertise_count = 0
-            for node_id, node_data in knowledge_graph._graph.nodes(data=True):
-                if node_data.get("type") == "author":
-                    expertise_count += 1
-            result.expertise_count = expertise_count
-
             hotspots: list[DashboardHotspot] = []
-            total_health = 0.0
-            file_count = 0
-
             for node_id, node_data in knowledge_graph._graph.nodes(data=True):
                 if node_data.get("type") == "file":
-                    health = node_data.get("health_score", 1.0)
-                    total_health += health
-                    file_count += 1
-
+                    health = node_data.get("health_score", 0.0)
                     if health < 0.5:
+                        reason = "Low health score - consider refactoring" if health > 0 else "Missing health score"
                         hotspots.append(DashboardHotspot(
                             file_path=node_id,
                             health_score=round(health, 2),
-                            reason="Low health score - consider refactoring"
+                            reason=reason,
                         ))
-
-            if file_count > 0:
-                result.avg_health_score = round(total_health / file_count, 2)
-
             result.hotspots = sorted(hotspots, key=lambda h: h.health_score)[:10]
 
-        if decision_service:
-            project_id = pp.name
-            try:
-                decisions = decision_service.get_decisions_by_project(project_id)
-                result.decisions_count = len(decisions)
-            except Exception:
-                result.decisions_count = 0
+        vector_service = getattr(request.app.state, "vector_service", None)
 
+        # ── Active index job takes priority (in-memory, real-time) ────
         if index_jobs:
             for job_id, status in index_jobs.items():
                 result.index_job_id = job_id
@@ -150,14 +126,45 @@ async def get_dashboard_metrics(project_path: str, request: Request) -> Dashboar
                     result.files_indexed = status.files_processed or 0
                     break
 
+        # ── No active job — read from vector store (persists restarts) ─
         if not result.is_indexing and result.files_indexed == 0:
-            result.files_indexed = _count_source_files(project_path)
+            if vector_service and vector_service.has_project_index(project_id):
+                result.files_indexed = vector_service.get_indexed_file_count(project_id)
+                result.index_status = "completed"
+            else:
+                last_entry = _load_last_index_history(project_id)
+                if last_entry:
+                    result.files_indexed = last_entry.get("files", 0)
+                    result.index_status = last_entry.get("status", "completed")
+
+        # ── Last indexed timestamp ────────────────────────────────────
+        last_entry = _load_last_index_history(project_id)
+        if last_entry and last_entry.get("date"):
+            result.last_indexed_at = last_entry["date"]
+
+        # ── Recent commits via on-the-fly GitService ──────────────────
+        try:
+            from server.services.git_service import GitService
+
+            git_svc = GitService(str(pp))
+            commits = git_svc.get_recent_commits(limit=10)
+            result.recent_commits = [
+                RecentCommit(
+                    sha=c.sha,
+                    message=c.message.split("\n")[0] if c.message else "",
+                    author=c.author,
+                    date=c.date.isoformat() if c.date else "",
+                    files_changed=c.files_changed,
+                )
+                for c in commits
+            ]
+        except Exception as exc:
+            logger.debug("Failed to load recent commits: %s", exc)
 
         # ── Recent CG-pilot questions ─────────────────────────────────
         chat_history = getattr(request.app.state, "chat_history_service", None)
         if chat_history:
             try:
-                project_id = pp.name
                 recent = chat_history.get_recent(project_id, limit=5)
                 result.recent_questions = [
                     RecentQuestion(**q) for q in recent

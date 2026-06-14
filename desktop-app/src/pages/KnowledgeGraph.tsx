@@ -133,12 +133,10 @@ export default function KnowledgeGraph() {
     });
 
     dependencyLinks.forEach((dep) => {
-      if (nodesMap.has(dep.source as string) && nodesMap.has(dep.target as string)) {
-        links.push({
-          source: dep.source,
-          target: dep.target,
-          type: "dependency"
-        });
+      const srcId = typeof dep.source === "string" ? dep.source : (dep.source as FileNode).id;
+      const tgtId = typeof dep.target === "string" ? dep.target : (dep.target as FileNode).id;
+      if (nodesMap.has(srcId) && nodesMap.has(tgtId)) {
+        links.push({ source: srcId, target: tgtId, type: "dependency" });
       }
     });
 
@@ -273,7 +271,7 @@ export default function KnowledgeGraph() {
     return () => {
       simulation.stop();
     };
-  }, [graphData, collapsedDirs]);
+  }, [graphData]);
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return;

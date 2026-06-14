@@ -5,9 +5,9 @@ interface StreamingTextProps {
 
 export function StreamingText({ text, className = "" }: StreamingTextProps) {
   return (
-    <div className={`relative ${className}`}>
-      <span>{text}</span>
-      <span className="animate-blink inline-block w-0.5 h-4 bg-accent-blue ml-0.5 align-middle" />
-    </div>
+    <span className={`font-mono ${className}`}>
+      {text}
+      <span className="animate-blink text-accent-green text-shadow-glow">█</span>
+    </span>
   );
 }

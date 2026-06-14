@@ -3,23 +3,23 @@
 @tailwind utilities;
 
 :root {
-  --bg-primary: #0B1121;
-  --bg-secondary: #131C33;
-  --bg-tertiary: #1A2340;
-  --bg-hover: #1E2D4A;
-  --border: #1E2D4A;
-  --border-subtle: #162033;
-  --text-primary: #E2E8F0;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  --accent-blue: #3B82F6;
-  --accent-purple: #8B5CF6;
-  --accent-green: #10B981;
-  --accent-amber: #F59E0B;
-  --accent-yellow: #EAB308;
-  --accent-red: #EF4444;
-  --accent-violet: #8B5CF6;
-  --accent-cyan: #06B6D4;
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #0d0d0d;
+  --bg-tertiary: #111111;
+  --bg-hover: #161616;
+  --border: #1f521f;
+  --border-subtle: #0f2d0f;
+  --text-primary: #33ff00;
+  --text-secondary: #22cc00;
+  --text-muted: #1f521f;
+  --accent-green: #33ff00;
+  --accent-amber: #ffb000;
+  --accent-red: #ff3333;
+  --accent-cyan: #00ffff;
+  --glow: 0 0 6px rgba(51, 255, 0, 0.45);
+  --glow-strong: 0 0 12px rgba(51, 255, 0, 0.65);
+  --glow-amber: 0 0 6px rgba(255, 176, 0, 0.45);
+  --glow-red: 0 0 6px rgba(255, 51, 51, 0.45);
 }
 
 * {
@@ -37,76 +37,259 @@ body,
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'JetBrains Mono', 'Fira Code', 'VT323', monospace;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: none;
+  text-shadow: var(--glow);
+}
+
+/* All text inherits the glow — headings get a stronger one */
+h1, h2, h3 {
+  text-shadow: var(--glow-strong);
 }
 
 code, pre, .font-mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+/* CRT scanlines — fixed full-screen overlay */
+#crt-overlay {
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.04) 2px,
+    rgba(0, 0, 0, 0.04) 4px
+  );
+  pointer-events: none;
+  z-index: 99999;
+}
+
+/* CRT vignette */
+#crt-overlay::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 60%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  pointer-events: none;
+}
+
+/* Scrollbar — thin green */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--text-secondary);
 }
 
 @layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
+  /* ── Glow text ──────────────────────────────── */
+  .glow        { text-shadow: var(--glow); }
+  .glow-strong { text-shadow: var(--glow-strong); }
+  .glow-amber  { text-shadow: var(--glow-amber); color: var(--accent-amber); }
+  .glow-red    { text-shadow: var(--glow-red);   color: var(--accent-red); }
+
+  /* ── Box glows ──────────────────────────────── */
+  .box-glow        { box-shadow: 0 0 0 1px var(--border), 0 0 10px rgba(51, 255, 0, 0.08); }
+  .box-glow-active { box-shadow: 0 0 0 1px var(--accent-green), 0 0 16px rgba(51, 255, 0, 0.2); }
+
+  /* ── Cursor utilities ───────────────────────── */
+  .cursor-block::after {
+    content: '█';
+    animation: blink 1s step-end infinite;
+    margin-left: 1px;
+    color: var(--accent-green);
+    text-shadow: var(--glow-strong);
   }
-  
-  .scrollbar-none {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+
+  .cursor-underscore::after {
+    content: '_';
+    animation: blink 1s step-end infinite;
+    margin-left: 1px;
   }
-  
-  .scrollbar-none::-webkit-scrollbar {
-    display: none;
+
+  /* ── Terminal prompt prefix ─────────────────── */
+  .prompt-prefix::before {
+    content: '> ';
+    color: var(--accent-green);
+    text-shadow: var(--glow);
   }
-  
+
+  /* ── Progress bar fill ──────────────────────── */
+  .progress-bar-shimmer {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px rgba(51, 255, 0, 0.4);
+  }
+
+  /* ── Spinner ────────────────────────────────── */
+  .spinner {
+    border: 1px solid var(--border);
+    border-top-color: var(--accent-green);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    box-shadow: var(--glow);
+  }
+
+  /* ── Hover glitch ───────────────────────────── */
+  .hover-glitch:hover {
+    animation: glitch 0.25s ease-in-out;
+  }
+
+  /* ── Terminal window chrome ─────────────────── */
+  .term-window {
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+  }
+
+  .term-titlebar {
+    border-bottom: 1px solid var(--border);
+    padding: 4px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .term-titlebar::before {
+    content: '+--';
+    color: var(--border);
+  }
+
+  .term-titlebar::after {
+    content: '--+';
+    color: var(--border);
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  /* ── Scrollbars ─────────────────────────────── */
+  .scrollbar-thin  { scrollbar-width: thin; }
+  .scrollbar-none  { scrollbar-width: none; -ms-overflow-style: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+
+  /* ── Animations ─────────────────────────────── */
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+
   @keyframes shimmer {
-    0% { background-position: -200% 0; }
+    0%   { background-position: -200% 0; }
     100% { background-position: 200% 0; }
   }
-  
-  @keyframes progress-stripe {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(200%); }
+
+  @keyframes glitch {
+    0%   { transform: translate(0); }
+    20%  { transform: translate(-2px, 1px); filter: hue-rotate(90deg); }
+    40%  { transform: translate(2px, -1px); }
+    60%  { transform: translate(-1px, 2px); filter: hue-rotate(-90deg); }
+    80%  { transform: translate(1px, -1px); }
+    100% { transform: translate(0); filter: none; }
   }
-  
-  .animate-shimmer {
-    animation: shimmer 2s ease-in-out infinite;
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
-  
-  .animate-progress-stripe {
-    animation: progress-stripe 1s ease-in-out infinite;
+
+  @keyframes scanline {
+    0%   { top: -10%; }
+    100% { top: 110%; }
   }
-  
-  .progress-bar-shimmer {
-    background: linear-gradient(90deg, #3B82F6 0%, #8B5CF6 50%, #3B82F6 100%);
-    background-size: 200% 100%;
+
+  /* ── Material-TUI panel system ──────────────── */
+  .tui-border {
+    border: 1px solid #3f4852;
+    position: relative;
   }
-  
-  .spinner {
-    border: 2px solid rgba(255, 255, 255, 0.1);
-    border-radius: 50%;
-    border-top-color: #3B82F6;
-    animation: spin 1s ease-in-out infinite;
+
+  .tui-border-title {
+    position: absolute;
+    top: -10px;
+    left: 12px;
+    padding: 0 4px;
+    background: #131313;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Animated moving scanline overlay */
+  .scanline-effect {
+    position: fixed;
+    left: 0;
+    right: 0;
+    height: 20%;
+    background: linear-gradient(
+      to bottom,
+      transparent,
+      rgba(150, 204, 255, 0.03),
+      transparent
+    );
+    animation: scanline 8s linear infinite;
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  /* Blinking cursor for new design */
+  .cursor-blink {
+    animation: blink 1s step-end infinite;
+  }
+
+  /* ── Markdown in CGPilot ────────────────────── */
+  .markdown-content {
+    line-height: 1.6;
+  }
+
+  .markdown-content p     { margin-bottom: 0.5em; }
+  .markdown-content ul    { list-style: none; padding-left: 1em; }
+  .markdown-content ul li::before { content: '> '; color: var(--accent-green); }
+  .markdown-content ol    { list-style: none; padding-left: 1em; counter-reset: item; }
+  .markdown-content ol li { counter-increment: item; }
+  .markdown-content ol li::before { content: counter(item) '. '; color: var(--text-secondary); }
+  .markdown-content code  {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    padding: 0 4px;
+    color: var(--accent-cyan);
+  }
+  .markdown-content pre   {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 6px 0;
+  }
+  .markdown-content a {
+    color: var(--accent-green);
+    text-decoration: underline;
+  }
+  .markdown-content blockquote {
+    border-left: 2px solid var(--accent-amber);
+    padding-left: 10px;
+    color: var(--text-secondary);
   }
 }

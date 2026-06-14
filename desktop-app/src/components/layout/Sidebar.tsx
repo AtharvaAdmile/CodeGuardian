@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   GitBranch,
@@ -8,93 +7,108 @@ import {
   Database,
   ShieldCheck,
   Settings,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
-import { StatusDot } from "../shared/Badge";
 import type { HealthStatus } from "../../lib/types";
 
 interface SidebarProps {
   healthStatus: HealthStatus | null;
+  onClearProject?: () => void;
 }
 
 const navItems = [
-  { path: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { path: "/graph", icon: GitBranch, label: "Knowledge Graph" },
-  { path: "/review", icon: GitCommit, label: "Commit Review" },
-  { path: "/files", icon: FolderTree, label: "File Explorer" },
-  { path: "/compliance", icon: ShieldCheck, label: "Compliance" },
-  { path: "/indexing", icon: Database, label: "Indexing" },
-  { path: "/settings", icon: Settings, label: "Settings" },
+  { path: "/",           icon: LayoutDashboard, label: "DASHBOARD" },
+  { path: "/graph",      icon: GitBranch,        label: "GRAPH" },
+  { path: "/indexing",   icon: Database,         label: "INDEXER" },
+  { path: "/compliance", icon: ShieldCheck,      label: "COMPLIANCE" },
+  { path: "/files",      icon: FolderTree,       label: "REPOS" },
+  { path: "/review",     icon: GitCommit,        label: "REVIEW" },
+  { path: "/settings",   icon: Settings,         label: "CONFIG" },
 ];
 
-export function Sidebar({ healthStatus }: SidebarProps) {
-  const [isExpanded, setIsExpanded] = useState(() => {
-    const saved = localStorage.getItem("sidebarExpanded");
-    return saved ? JSON.parse(saved) : false;
-  });
-
-  const handleToggle = () => {
-    const newValue = !isExpanded;
-    setIsExpanded(newValue);
-    localStorage.setItem("sidebarExpanded", JSON.stringify(newValue));
-  };
-
-  const serverStatus = healthStatus?.status || "unhealthy";
+export function Sidebar({ healthStatus, onClearProject }: SidebarProps) {
+  const navigate = useNavigate();
+  const isHealthy = healthStatus?.status === "healthy";
 
   return (
-    <aside
-      className={`
-        flex flex-col bg-bg-secondary border-r border-border
-        transition-all duration-200 ease-out
-        ${isExpanded ? "w-56" : "w-16"}
-      `}
-    >
-      <div className="flex-1 py-4">
-        <nav className="space-y-1 px-2">
+    <aside className="w-64 shrink-0 flex flex-col bg-surface-container-low border-r border-outline-variant font-mono">
+      {/* Brand header */}
+      <div className="px-4 py-3.5 border-b border-outline-variant">
+        <div className="text-primary font-bold text-sm tracking-wide">GUARD_SYS_v1.0</div>
+        <div className="flex items-center gap-1.5 mt-1">
+          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isHealthy ? "bg-secondary" : "bg-error"}`} />
+          <span className="text-[11px] text-on-surface-variant">
+            STATUS: {isHealthy ? "SECURE" : "OFFLINE"}
+          </span>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <div className="flex-1 px-3 py-4">
+        <div className="text-[11px] font-extrabold tracking-[0.1em] uppercase text-outline-variant mb-3 px-1">
+          NAVIGATION
+        </div>
+        <nav className="space-y-0.5">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
-              className={({ isActive }) => `
-                flex items-center gap-3 px-3 py-2 rounded-lg
-                transition-all duration-150
-                ${
+              end={item.path === "/"}
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 px-3 py-2 text-[12px] transition-colors ${
                   isActive
-                    ? "bg-accent-blue/10 text-accent-blue border-l-2 border-accent-blue"
-                    : "text-text-secondary hover:bg-bg-hover hover:text-text-primary border-l-2 border-transparent"
-                }
-              `}
-              title={!isExpanded ? item.label : undefined}
+                    ? "bg-primary text-on-primary"
+                    : "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
+                }`
+              }
             >
-              <item.icon className="w-5 h-5 flex-shrink-0" />
-              {isExpanded && <span className="text-sm font-medium">{item.label}</span>}
+              {({ isActive }) => (
+                <>
+                  <item.icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.5} />
+                  <span className="uppercase tracking-wider flex-1">{item.label}</span>
+                  {isActive && <span className="text-[9px] text-on-primary/60">●</span>}
+                </>
+              )}
             </NavLink>
           ))}
         </nav>
       </div>
 
-      <div className="p-2 border-t border-border">
+      {/* Run Scan button */}
+      <div className="px-3 pb-3">
         <button
-          onClick={handleToggle}
-          className="w-full flex items-center justify-center p-2 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-colors"
+          onClick={() => navigate("/compliance")}
+          className="w-full py-2 text-[12px] font-bold text-on-secondary-container bg-secondary-container hover:opacity-90 transition-opacity uppercase tracking-wider"
         >
-          {isExpanded ? (
-            <ChevronLeft className="w-5 h-5" />
-          ) : (
-            <ChevronRight className="w-5 h-5" />
-          )}
+          [ RUN SCAN ]
         </button>
+      </div>
 
-        {isExpanded && (
-          <div className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-text-secondary">
-            <StatusDot status={serverStatus as "healthy" | "degraded" | "unhealthy"} />
-            <span>Server</span>
-            <span className="text-xs text-text-muted">
-              {healthStatus ? `${Math.round(healthStatus.uptime_seconds / 60)}m` : "offline"}
-            </span>
-          </div>
-        )}
+      {/* System links */}
+      <div className="px-3 pb-4 pt-3 border-t border-outline-variant">
+        <div className="text-[11px] font-extrabold tracking-[0.1em] uppercase text-outline-variant mb-2">
+          SYSTEM
+        </div>
+        <div className="flex gap-4 text-[12px] text-on-surface-variant">
+          <NavLink to="/settings" className="hover:text-on-surface transition-colors uppercase">
+            Config
+          </NavLink>
+          <a
+            href="https://github.com/anthropics/claude-code/issues"
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-on-surface transition-colors uppercase"
+          >
+            Help
+          </a>
+          {onClearProject && (
+            <button
+              onClick={onClearProject}
+              className="hover:text-error transition-colors uppercase"
+            >
+              Logout
+            </button>
+          )}
+        </div>
       </div>
     </aside>
   );

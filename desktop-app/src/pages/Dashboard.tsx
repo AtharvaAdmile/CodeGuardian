@@ -2,38 +2,114 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FileText,
-  GitBranch,
-  Activity,
   Network,
-  AlertTriangle,
+  Clock,
+  GitBranch,
+  GitCommit,
   MessageSquare,
-  TrendingUp,
 } from "lucide-react";
 import { useProjectContext } from "../App";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { getDashboardMetrics } from "../lib/api";
-import type { DashboardResponse, DashboardHotspot, RecentQuestion } from "../lib/types";
+import type { DashboardResponse, RecentCommit, RecentQuestion } from "../lib/types";
 
 interface MetricCardProps {
-  icon: React.ReactNode;
-  label: string;
+  title: string;
   value: string | number;
+  icon: React.ElementType;
   color: string;
   onClick?: () => void;
 }
 
-function MetricCard({ icon, label, value, color, onClick }: MetricCardProps) {
+function MetricCard({ title, value, icon: Icon, color, onClick }: MetricCardProps) {
   return (
-    <button
+    <div
+      className={`tui-border p-5 ${onClick ? "cursor-pointer hover:bg-surface-container transition-colors" : ""}`}
       onClick={onClick}
-      className="bg-bg-secondary border border-border rounded-xl p-4 hover:border-text-muted transition-colors text-left w-full"
     >
-      <div className="flex items-start justify-between mb-3">
-        <div className={`p-2 rounded-lg ${color}`}>{icon}</div>
+      <span className={`tui-border-title ${color}`}>{title}</span>
+      <div className="flex items-end justify-between pt-3">
+        <span className={`text-[20px] font-bold leading-tight ${color}`}>{value}</span>
+        <Icon className={`w-5 h-5 ${color} opacity-30`} />
       </div>
-      <div className="text-3xl font-bold" style={{ color }}>{value}</div>
-      <div className="text-sm text-text-secondary mt-1">{label}</div>
-    </button>
+    </div>
+  );
+}
+
+function formatRelativeTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return "NEVER";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "UNKNOWN";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays === 1) return "yesterday";
+  if (diffDays < 30) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+function lastIndexedColor(dateStr: string | null): string {
+  if (!dateStr) return "text-on-surface-variant";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "text-on-surface-variant";
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 86400000) return "text-secondary";
+  return "text-tertiary";
+}
+
+function QueryItem({ question }: { question: RecentQuestion }) {
+  return (
+    <div
+      className="py-3 px-4 border-b border-outline-variant/50 last:border-0 cursor-pointer hover:bg-surface-container transition-colors"
+      onClick={() =>
+        window.dispatchEvent(new CustomEvent("cg-open-session", { detail: question.session_id }))
+      }
+    >
+      <div className="flex items-start gap-2">
+        <span className="text-primary text-[12px] shrink-0 font-bold">$</span>
+        <span className="text-on-surface text-[12px] flex-1 truncate">
+          {question.title || question.preview}
+        </span>
+      </div>
+      <div className="flex items-start gap-2 mt-1">
+        <span className="text-outline text-[12px] shrink-0">&gt;&gt;</span>
+        <span className="text-on-surface-variant text-[11px] flex-1 truncate">{question.preview}</span>
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <span className="text-[10px] px-1.5 py-0.5 bg-secondary-container text-on-secondary-container font-bold uppercase tracking-wider">
+          COMPLETED
+        </span>
+        <span className="text-outline text-[11px]">
+          {question.message_count} msg{question.message_count !== 1 ? "s" : ""}
+        </span>
+        <span className="text-outline text-[11px]">
+          {formatRelativeTime(question.updated_at || question.created_at)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CommitLine({ commit }: { commit: RecentCommit }) {
+  return (
+    <div className="py-2.5 px-4 border-b border-outline-variant/50 last:border-0">
+      <div className="flex items-baseline gap-2 text-[12px] min-w-0">
+        <span className="text-outline shrink-0">*</span>
+        <span className="text-tertiary shrink-0 font-bold">[{commit.sha.slice(0, 7)}]</span>
+        <span className="text-on-surface truncate">{commit.message}</span>
+      </div>
+      <div className="flex items-center gap-2 ml-5 mt-0.5 text-[11px]">
+        <span className="text-outline">|</span>
+        <span className="text-outline">└─</span>
+        <span className="text-on-surface-variant shrink-0">{commit.author}</span>
+        <span className="text-outline">·</span>
+        <span className="text-outline">{formatRelativeTime(commit.date)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -44,8 +120,10 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!projectPath) return;
-
+    if (!projectPath) {
+      setIsLoading(false);
+      return;
+    }
     const loadDashboard = async () => {
       try {
         const result = await getDashboardMetrics(projectPath);
@@ -56,161 +134,143 @@ export default function Dashboard() {
         setIsLoading(false);
       }
     };
-
     loadDashboard();
   }, [projectPath]);
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center h-full bg-surface">
         <LoadingSpinner size="lg" />
       </div>
     );
   }
 
   const isIndexing = dashboardData?.is_indexing || indexStatus?.status === "running";
-  const filesIndexed = dashboardData?.files_indexed ?? indexStatus?.files_processed ?? 0;
+  const filesIndexed = isIndexing
+    ? (indexStatus?.files_processed ?? dashboardData?.files_indexed ?? 0)
+    : (dashboardData?.files_indexed ?? 0);
   const graphNodes = dashboardData?.graph_nodes ?? 0;
-  const avgHealth = dashboardData?.avg_health_score ?? 0;
   const graphEdges = dashboardData?.graph_edges ?? 0;
-  const hotspots = dashboardData?.hotspots ?? [];
+  const lastIndexedAt = dashboardData?.last_indexed_at ?? null;
+  const recentCommits = dashboardData?.recent_commits ?? [];
   const recentQuestions = dashboardData?.recent_questions ?? [];
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-6 border-b border-border">
-        <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
-        <p className="text-text-secondary mt-1">
-          {projectName} — {isIndexing ? "Indexing in progress..." : "Ready"}
-        </p>
+    <div className="h-full overflow-y-auto p-6 pt-8 pb-14 bg-surface font-mono space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-[11px] text-on-surface-variant">
+        <span className="text-primary">/</span>
+        <span className="uppercase tracking-wider">dashboard</span>
+        {projectName && (
+          <>
+            <span className="text-outline-variant">/</span>
+            <span className="text-on-surface uppercase truncate max-w-xs">{projectName}</span>
+          </>
+        )}
+        {isIndexing && (
+          <span className="ml-2 text-tertiary uppercase tracking-wider animate-pulseFast">
+            · INDEXING
+          </span>
+        )}
       </div>
-      <div className="flex-1 overflow-y-auto p-6">
-      <div className="space-y-6">
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Row 1 — Metric cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
         <MetricCard
-          icon={<FileText className="w-5 h-5" />}
-          label="Total Files"
+          title="TOTAL_FILES"
           value={filesIndexed}
-          color="text-accent-blue"
+          icon={FileText}
+          color="text-primary"
           onClick={() => navigate("/files")}
         />
         <MetricCard
-          icon={<Network className="w-5 h-5" />}
-          label="Graph Nodes"
+          title="GRAPH_NODES"
           value={graphNodes}
-          color="text-accent-violet"
+          icon={Network}
+          color="text-secondary"
           onClick={() => navigate("/graph")}
         />
         <MetricCard
-          icon={<Activity className="w-5 h-5" />}
-          label="Avg Health Score"
-          value={`${Math.round(avgHealth * 100)}%`}
-          color={avgHealth >= 0.8 ? "text-accent-green" : avgHealth >= 0.5 ? "text-accent-amber" : "text-accent-red"}
-          onClick={() => navigate("/graph")}
+          title="LAST_INDEXED"
+          value={formatRelativeTime(lastIndexedAt)}
+          icon={Clock}
+          color={lastIndexedColor(lastIndexedAt)}
+          onClick={() => navigate("/indexing")}
         />
         <MetricCard
-          icon={<GitBranch className="w-5 h-5" />}
-          label="Graph Edges"
+          title="GRAPH_EDGES"
           value={graphEdges}
-          color="text-accent-cyan"
+          icon={GitBranch}
+          color="text-on-surface-variant"
           onClick={() => navigate("/graph")}
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-bg-secondary border border-border rounded-xl p-4">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-accent-blue" />
-              Recent Questions
-            </h2>
-            <div className="space-y-3">
-              {recentQuestions.length === 0 ? (
-                <div className="text-center py-8 text-text-muted">
-                  <p className="text-sm">No questions asked yet</p>
-                  <p className="text-xs mt-1">Ask CG-pilot about your codebase</p>
-                </div>
-              ) : (
-                recentQuestions.map((q: RecentQuestion) => (
-                  <div
-                    key={q.session_id}
-                    className="flex items-start gap-3 rounded-lg border border-border bg-bg-primary p-3 hover:border-accent-blue/30 transition-colors cursor-pointer"
-                    onClick={() => {
-                      window.dispatchEvent(
-                        new CustomEvent("cg-open-session", { detail: q.session_id })
-                      );
-                    }}
-                  >
-                    <MessageSquare className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-cyan" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-text-primary">
-                        {q.title || q.preview}
-                      </p>
-                      <p className="mt-1 line-clamp-2 text-xs text-text-muted">
-                        {q.preview}
-                      </p>
-                      <p className="mt-1 text-[10px] text-text-muted">
-                        {q.message_count} message{q.message_count !== 1 ? "s" : ""}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
+      {/* Row 2 — Queries + Graph + Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mt-2">
+        {/* RECENT_QUERIES — 3 cols */}
+        <div className="lg:col-span-3 tui-border">
+          <span className="tui-border-title text-primary flex items-center gap-1.5">
+            <MessageSquare className="w-3 h-3 inline-block" />
+            RECENT_QUERIES
+          </span>
+          {recentQuestions.length === 0 ? (
+            <div className="px-4 py-10 text-center">
+              <p className="text-[11px] text-outline uppercase tracking-wider">-- NO QUERIES YET --</p>
+              <p className="text-[11px] text-on-surface-variant mt-1">
+                ask cg-pilot a question to get started
+              </p>
+            </div>
+          ) : (
+            <div>
+              {recentQuestions.map((q: RecentQuestion) => (
+                <QueryItem key={q.session_id} question={q} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right column — 2 cols */}
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          {/* GRAPH_REPRESENTATION */}
+          <div className="tui-border">
+            <span className="tui-border-title text-secondary">GRAPH_REPRESENTATION</span>
+            <div
+              className="bg-surface-container-low m-3 flex flex-col items-center justify-center py-8 cursor-pointer group hover:bg-surface-container transition-colors"
+              onClick={() => navigate("/graph")}
+            >
+              <pre className="text-[11px] text-outline-variant leading-snug select-none text-center">
+{`  ●━━━━●━━━●
+  ┃    ┃   ┃
+  ●    ●━━━●
+  ┃        ┃
+  ●━━━━━━━━●`}
+              </pre>
+              <div className="mt-3 text-[11px] text-on-surface-variant group-hover:text-primary transition-colors uppercase tracking-wider">
+                [ VIEW KNOWLEDGE GRAPH ]
+              </div>
             </div>
           </div>
 
-        <div className="bg-bg-secondary border border-border rounded-xl p-4">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-accent-amber" />
-            Top Hotspots
-          </h2>
-          <div className="space-y-3">
-            {hotspots.length === 0 ? (
-              <div className="text-center py-8 text-text-muted">
-                <p className="text-sm">No hotspots detected</p>
-                <button
-                  onClick={() => navigate("/files")}
-                  className="text-accent-blue hover:underline text-sm mt-2"
-                >
-                  Explore files →
-                </button>
+          {/* SYS_ACTIVITY_LOG */}
+          <div className="tui-border">
+            <span className="tui-border-title text-tertiary flex items-center gap-1.5">
+              <GitCommit className="w-3 h-3 inline-block" />
+              SYS_ACTIVITY_LOG
+            </span>
+            {recentCommits.length === 0 ? (
+              <div className="px-4 py-6 text-center">
+                <p className="text-[11px] text-outline uppercase tracking-wider">-- NO COMMITS --</p>
               </div>
             ) : (
-              hotspots.map((hotspot: DashboardHotspot, index: number) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-bg-primary rounded-lg border border-border">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-text-primary truncate">
-                      {hotspot.file_path}
-                    </p>
-                    <p className="text-xs text-text-muted mt-1">{hotspot.reason}</p>
-                  </div>
-                  <div className="ml-3 flex items-center gap-2">
-                    <span className="text-xs font-medium text-accent-red">
-                      {Math.round(hotspot.health_score * 100)}%
-                    </span>
-                  </div>
-                </div>
-              ))
+              <div>
+                {recentCommits.slice(0, 5).map((commit: RecentCommit) => (
+                  <CommitLine key={commit.sha} commit={commit} />
+                ))}
+              </div>
             )}
           </div>
         </div>
-      </div>
-
-      <div className="bg-bg-secondary border border-border rounded-xl p-4">
-        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <GitBranch className="w-5 h-5 text-accent-violet" />
-          Dependency Overview
-        </h2>
-        <div className="h-64 flex items-center justify-center text-text-muted">
-          <button
-            onClick={() => navigate("/graph")}
-            className="text-accent-blue hover:underline"
-          >
-            View full knowledge graph →
-          </button>
-        </div>
-      </div>
-      </div>
       </div>
     </div>
   );

@@ -126,6 +126,7 @@ class KnowledgeGraph:
                 path=rel,
                 language=_detect_language(fp),
                 line_count=line_count,
+                health_score=_compute_file_health(line_count),
             )
 
         # ── b) Import edges (file → file) ───────────────────────────────
@@ -636,6 +637,30 @@ def _count_lines(fp: Path) -> int:
         for chunk in iter(lambda: f.read(1 << 16), b""):
             count += chunk.count(b"\n")
     return count
+
+
+def _compute_file_health(line_count: int) -> float:
+    """
+    Heuristic health score for a file based on line count.
+
+    Rule of thumb:
+      - < 50 lines:   0.95 (small — may be incomplete or a stub)
+      -  50–200       1.00 (sweet spot — focused, readable)
+      - 200–500       0.85 (getting long — worth watching)
+      - 500–1000      0.65 (long — consider splitting)
+      - > 1000        0.40 (needs refactoring)
+    """
+    if line_count <= 0:
+        return 0.80
+    if line_count < 50:
+        return 0.95
+    if line_count <= 200:
+        return 1.00
+    if line_count <= 500:
+        return 0.85
+    if line_count <= 1000:
+        return 0.65
+    return 0.40
 
 
 def _stable_id(value: str) -> str:
